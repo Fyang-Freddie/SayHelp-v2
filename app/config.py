@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     milvus_minio_user: str = ""
     milvus_minio_password: str = ""
 
+    embedding_model: str = "BAAI/bge-m3"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    embedding_use_fp16: bool = False
+
     langfuse_host: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
