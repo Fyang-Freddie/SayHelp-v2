@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     embedding_use_fp16: bool = False
 
+    # 检索编排（Task 6）：rerank 分数 ≥ rerank_min 视为有效证据；
+    # evidence_confidence ≥ evidence_confidence_threshold 才通过闸（待标注集校准）。
+    rerank_min: float = 0.3
+    evidence_confidence_threshold: float = 0.5
+
     langfuse_host: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
