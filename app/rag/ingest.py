@@ -20,7 +20,13 @@ def ingest_markdown(session: Session, *, md_text: str, content_type: str,
         (c.category, c.questions)
         for c in session.query(KnowledgeChunk.category, KnowledgeChunk.questions).all()
     }
-    new_drafts = [d for d in drafts if (d.category, d.questions) not in existing]
+    seen = set(existing)
+    new_drafts = []
+    for d in drafts:
+        key = (d.category, d.questions)
+        if key not in seen:
+            seen.add(key)
+            new_drafts.append(d)
     new_chunks = [KnowledgeChunk(
         category=d.category, questions=d.questions, answer=d.answer,
         section_path=d.section_path, content_type=d.content_type, is_key_clause=d.is_key_clause,

@@ -32,3 +32,13 @@ def test_ingest_dual_write_and_idempotent(db_session):
     assert r2["inserted"] == 0 and r2["skipped"] == 2
     assert store2.upserted == []  # done 的 chunk 不重复 embed
     assert db_session.query(KnowledgeChunk).count() == 2
+
+
+def test_ingest_dedupes_within_batch(db_session):
+    dup_md = "# 售后政策\n\n## A01【售后类型】\n售后服务包括补发。\n\n## A01【售后类型】\n重复标题。\n"
+    store = _RecordingStore()
+    r = ingest_markdown(db_session, md_text=dup_md, content_type="manual",
+                        root_category="售后政策", embedder=FakeEmbedder(), vector_store=store)
+    assert r["inserted"] == 1
+    assert db_session.query(KnowledgeChunk).count() == 1
+    assert len(store.upserted) == 1
