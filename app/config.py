@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     # evidence_confidence ≥ evidence_confidence_threshold 才通过闸（待标注集校准）。
     rerank_min: float = 0.3
     evidence_confidence_threshold: float = 0.5
+    # 意图置信度阈值，待标注集校准
+    intent_confidence_threshold: float = 0.5
 
     langfuse_host: str = ""
     langfuse_public_key: str = ""
