@@ -99,6 +99,7 @@ async function* parseSse(stream) {
     for (const ev of events) yield ev;
   }
   buf += dec.decode(); // 冲刷最后未解码的字节
+  if (buf) buf += "\n\n"; // 强制冲刷最后一个可能不完整的帧
   const { events } = parseSseChunk(buf);
   for (const ev of events) yield ev;
 }
@@ -328,6 +329,14 @@ async function sendMessage() {
   }
 }
 
+async function loadUser() {
+  const r = await api("/api/auth/me");
+  if (!r.ok) return;
+  const u = await r.json();
+  const el = document.getElementById("user-name");
+  if (el) el.textContent = u.display_name || u.username;
+}
+
 function initChatPage() {
   const compose = document.getElementById("compose");
   if (!compose) return;
@@ -356,6 +365,7 @@ function initChatPage() {
     }
   });
 
+  loadUser();
   loadConversations();
 }
 
