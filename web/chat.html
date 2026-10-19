@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SayHelp · 会话</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <h1>SayHelp</h1>
+        <button type="button" id="new-conversation" class="btn btn-primary">＋ 新会话</button>
+      </header>
+      <ul id="conversation-list" class="conversation-list"></ul>
+      <footer class="sidebar-footer">
+        <span id="user-name" class="user-name"></span>
+        <button type="button" id="logout" class="btn btn-ghost">退出登录</button>
+      </footer>
+    </aside>
+    <main class="chat">
+      <div id="messages" class="messages">
+        <p id="empty-hint" class="empty-hint">选择或新建一个会话，开始提问。</p>
+      </div>
+      <form id="compose" class="compose">
+        <textarea id="input" rows="1" placeholder="输入消息…" required></textarea>
+        <button type="submit" class="btn btn-primary" id="send">发送</button>
+      </form>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
