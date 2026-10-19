@@ -12,11 +12,13 @@ class ChunkDraft:
 
 
 def _heading_level(line: str) -> tuple[int, str] | None:
-    """返回 (层级, 标题)；仅 ## 与 ### 参与切分，H1(# )作文档标题忽略。"""
+    """返回 (层级, 标题)；## 与 ### 参与切分，H1(# ) 文档开头作文档标题、正文中自成一块。"""
     if line.startswith("### "):
         return 3, line[4:].strip()
     if line.startswith("## "):
         return 2, line[3:].strip()
+    if line.startswith("# "):
+        return 1, line[2:].strip()
     return None
 
 
@@ -47,6 +49,19 @@ def split_policy_markdown(md_text: str, *, content_type: str, root_category: str
     chapter_title: str | None = None
     for i, (level, title, body) in enumerate(sections):
         body_text = "\n".join(body).strip()
+        if level == 1:
+            # 文档开头 H1（index 0）为文档标题+前置 blockquote，跳过；正文中的 H1 自成一块
+            chapter_title = None
+            if i == 0:
+                continue
+            if body_text:
+                chunks.append(ChunkDraft(
+                    category=root_category, questions=title, answer=body_text,
+                    section_path=f"{root_category} > {title}",
+                    content_type=content_type,
+                    is_key_clause=("【" in title and "】" in title),
+                ))
+            continue
         if level == 2:
             if has_child[i]:
                 # 章：仅作分组路径；若有正文（章节导语）单独成块

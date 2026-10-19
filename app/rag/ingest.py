@@ -12,7 +12,8 @@ class VectorStore(Protocol):
 
 
 def ingest_markdown(session: Session, *, md_text: str, content_type: str,
-                    root_category: str, embedder: Embedder, vector_store: VectorStore) -> dict:
+                    root_category: str, embedder: Embedder, vector_store: VectorStore,
+                    mark_done: bool = True) -> dict:
     drafts = split_policy_markdown(md_text, content_type=content_type, root_category=root_category)
 
     # 1) 先写 MySQL（pending），以 (category, questions) 去重避免重复行
@@ -46,10 +47,11 @@ def ingest_markdown(session: Session, *, md_text: str, content_type: str,
              "section_path": c.section_path, "content_type": c.content_type}
             for i, (c, v) in enumerate(zip(pending, vectors))
         ])
-        for c in pending:
-            c.vector_id = str(c.id)
-            c.vectorize_status = "done"
-        session.commit()
+        if mark_done:
+            for c in pending:
+                c.vector_id = str(c.id)
+                c.vectorize_status = "done"
+            session.commit()
 
     skipped = len(drafts) - len(new_drafts)
     return {"inserted": len(new_drafts), "vectorized": len(pending), "skipped": skipped}

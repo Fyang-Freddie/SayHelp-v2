@@ -54,3 +54,21 @@ def test_split_skips_front_matter_and_h1():
     chunks = split_policy_markdown(md, content_type="manual", root_category="售后政策")
     assert len(chunks) == 1
     assert chunks[0].questions == "A01【售后类型】"
+
+
+def test_mid_document_h1_becomes_own_chunk():
+    md = (
+        "# 商品规格手册\n\n"
+        "## 40. 宠物主粮（型号 MM-CATFOOD2K）\n参数说明。\n\n"
+        "# 商品检索规则\n\n1. 规则一\n2. 规则二\n"
+    )
+    chunks = split_policy_markdown(md, content_type="manual", root_category="商品规格手册")
+    questions = [c.questions for c in chunks]
+    assert "40. 宠物主粮（型号 MM-CATFOOD2K）" in questions
+    assert "商品检索规则" in questions
+    pet = next(c for c in chunks if "宠物主粮" in c.questions)
+    assert "商品检索规则" not in pet.answer and "规则一" not in pet.answer
+    rule = next(c for c in chunks if c.questions == "商品检索规则")
+    assert "规则一" in rule.answer
+    assert rule.category == "商品规格手册"
+    assert rule.section_path == "商品规格手册 > 商品检索规则"

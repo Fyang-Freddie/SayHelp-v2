@@ -45,6 +45,9 @@ class BGEReranker:
 
     ``FlagReranker`` 实为 ``BaseReranker`` 的别名；``compute_score()`` 接受
     ``[[query, passage], ...]`` 的句对列表，返回 ``list[float]``。
+
+    ``normalize=True`` 对原始 logits 施加 sigmoid，使分数落在 0..1，
+    与 ``FakeReranker`` 及检索闸（``compute_evidence_confidence``）的分母/阈值假设一致。
     """
 
     def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
@@ -55,6 +58,6 @@ class BGEReranker:
         if self.model is None:
             from FlagEmbedding import FlagReranker
 
-            self.model = FlagReranker(self.model_name)
+            self.model = FlagReranker(self.model_name, normalize=True)
         pairs = [[query, passage] for passage in passages]
         return self.model.compute_score(pairs)

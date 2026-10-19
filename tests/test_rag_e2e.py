@@ -31,3 +31,21 @@ def test_e2e_ingest_retrieve_cite(db_session):
     assert len(res.chunks) >= 1
     cites = build_citations(res.chunks)
     assert [c.index for c in cites] == list(range(1, len(cites) + 1))
+
+
+def test_ingest_mark_done_false_keeps_pending(db_session):
+    from app.models import KnowledgeChunk
+    from app.rag.embedder import FakeEmbedder
+    from app.rag.ingest import ingest_markdown
+
+    class _Store:
+        def upsert(self, records):
+            pass
+
+    md = "# 售后政策\n\n## A06【保修期限】\n手机 12 个月。\n"
+    ingest_markdown(db_session, md_text=md, content_type="manual", root_category="售后政策",
+                    embedder=FakeEmbedder(dim=8), vector_store=_Store(), mark_done=False)
+    rows = db_session.query(KnowledgeChunk).all()
+    assert rows
+    assert all(r.vectorize_status == "pending" for r in rows)
+    assert all(r.vector_id is None for r in rows)

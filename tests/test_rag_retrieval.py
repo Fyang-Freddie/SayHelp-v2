@@ -19,3 +19,24 @@ def test_retrieve_reranks_and_gates():
     assert res.chunks[0].snippet  # 非空摘要
     assert res.evidence_confidence >= 0.0
     assert isinstance(res.passed, bool)
+
+
+def test_margin_zero_with_single_valid_evidence():
+    from app.rag.embedder import FakeEmbedder
+    from app.rag.retrieval import Retriever, compute_evidence_confidence
+
+    class _Reranker:
+        def rerank(self, query, passages):
+            return [0.9, 0.1]  # 第一条强(≥rerank_min)、第二条弱(<rerank_min)
+
+    class _Store:
+        def hybrid_search(self, dense, query_text, top_k):
+            return [
+                {"chunk_id": 1, "text": "强证据", "category": "售后政策", "section_path": "售后政策 > A01", "content_type": "manual", "score": 0.9},
+                {"chunk_id": 2, "text": "弱证据", "category": "售后政策", "section_path": "售后政策 > A02", "content_type": "manual", "score": 0.1},
+            ]
+
+    r = Retriever(FakeEmbedder(dim=8), _Store(), _Reranker())
+    res = r.retrieve("查询", top_k=2)
+    # evidence_count=1 → margin 应为 0
+    assert res.evidence_confidence == compute_evidence_confidence(0.9, 1, 0.0)

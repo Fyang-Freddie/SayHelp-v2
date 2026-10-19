@@ -72,8 +72,8 @@ class Retriever:
 
         evidence_count = sum(1 for s in scores if s >= settings.rerank_min)
         top1 = chunks[0].score if chunks else 0.0
-        # margin = top1 - top2；证据不足 2 条时取 0（避免单条时误计 top1-0 为正分差）。
-        margin = top1 - chunks[1].score if len(chunks) > 1 else 0.0
+        # margin = top1 - top2；有效证据不足 2 条时取 0（避免单条强证据+垃圾第二条误计为正分差）。
+        margin = top1 - chunks[1].score if evidence_count >= 2 else 0.0
 
         evidence_confidence = compute_evidence_confidence(top1, evidence_count, margin)
         return RetrievalResult(
