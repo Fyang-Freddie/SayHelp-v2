@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +31,14 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+
+    @model_validator(mode="after")
+    def _reject_insecure_jwt_secret(self):
+        if self.jwt_secret == "dev-secret-change-me":
+            raise ValueError(
+                "JWT_SECRET 未配置或仍为开发默认值；请生成随机密钥写入 .env（参考 .env.example）"
+            )
+        return self
 
 
 settings = Settings()
