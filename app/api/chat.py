@@ -20,6 +20,8 @@ def sse_event(event: str, data: dict) -> str:
 @router.post("/chat/stream")
 def chat_stream(req: ChatStreamRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     conv = get_owned_conversation(req.conversation_id, user, db)
+    # 刷新会话活跃时间，保证列表按 updated_at 倒序时最近聊过的会话浮顶
+    conv.updated_at = datetime.now(timezone.utc)
     user_msg = Message(conversation_id=conv.id, role="user", content=req.content)
     db.add(user_msg); db.commit()
 

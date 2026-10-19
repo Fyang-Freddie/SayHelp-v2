@@ -1,7 +1,8 @@
 import json
 from collections import namedtuple
+from datetime import datetime
 
-from app.models import Message
+from app.models import Conversation, Message
 
 # 与 app/api/chat.py 的 P1_PLACEHOLDER 逐字一致（P3 替换生成逻辑，事件契约不变）。
 P1_PLACEHOLDER = "你好，我是 SayHelp 客服助手。当前为 P1 骨架阶段，完整问答将在后续阶段接入。"
@@ -85,6 +86,34 @@ def test_stream_on_nonexistent_conversation_404(client, user_a, db_session):
     ) as r:
         assert r.status_code == 404
     assert db_session.query(Message).count() == 0
+
+
+def test_sending_message_bubbles_conversation_to_top(client, user_a, conv_a, db_session):
+    # 同一用户的第二个会话，用于对比排序
+    conv_a2 = Conversation(user_id=user_a.id)
+    db_session.add(conv_a2)
+    db_session.commit()
+    db_session.refresh(conv_a2)
+
+    # 人为制造时间差：conv_a 旧、conv_a2 新，避免同一秒内创建的排序不确定
+    conv_a.updated_at = datetime(2020, 1, 1)
+    conv_a2.updated_at = datetime(2021, 1, 1)
+    db_session.commit()
+
+    headers = _auth(client, "user_a")
+    ids = [c["id"] for c in client.get("/api/conversations", headers=headers).json()]
+    assert ids == [conv_a2.id, conv_a.id]
+
+    with client.stream(
+        "POST", "/api/chat/stream",
+        json={"conversation_id": conv_a.id, "content": "你好"},
+        headers=headers,
+    ) as r:
+        assert r.status_code == 200
+        list(r.iter_lines())
+
+    ids = [c["id"] for c in client.get("/api/conversations", headers=headers).json()]
+    assert ids == [conv_a.id, conv_a2.id]
 
 
 def test_feedback_idempotent(client, user_a, msg_a, db_session):
