@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     jev_base_url: str = ""
     jev_api_key: str = ""
 
+    # 意图识别（P3）：调用 jev 意图模型的超时（秒）
+    intent_timeout_s: float = 10
+
     milvus_uri: str = "http://127.0.0.1:19530"
     milvus_token: str = ""
     milvus_minio_user: str = ""
