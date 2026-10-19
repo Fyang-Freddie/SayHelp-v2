@@ -11,8 +11,8 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-# 冻结的 MySQL DDL（由 Base.metadata 按依赖顺序编译，含中文 ENUM 字面量与
-# ON DELETE SET NULL 外键）。review_queue / conversations 先于
+# 冻结的 MySQL DDL（由 Base.metadata 按依赖顺序编译，含中文 ENUM 字面量、
+# ON DELETE SET NULL 外键与非唯一二级索引）。review_queue / conversations 先于
 # low_confidence_questions 创建；tool_audit_logs 无外键。
 _TABLES_UP = [
     ('conversation_summaries',
@@ -31,7 +31,7 @@ _TABLES_UP = [
      """CREATE TABLE conversations (
 	id BIGINT NOT NULL AUTO_INCREMENT, 
 	user_id BIGINT NOT NULL, 
-	status VARCHAR(32) NOT NULL, 
+	status VARCHAR(32) NOT NULL DEFAULT 'open', 
 	summary TEXT, 
 	summary_upto_msg_id BIGINT, 
 	layer1_from_msg_id BIGINT, 
@@ -42,7 +42,7 @@ _TABLES_UP = [
     ('eval_runs',
      """CREATE TABLE eval_runs (
 	id BIGINT NOT NULL AUTO_INCREMENT, 
-	triggered_by ENUM('定时','手动') NOT NULL, 
+	triggered_by ENUM('定时','手动') NOT NULL DEFAULT '定时', 
 	dataset_size INTEGER NOT NULL, 
 	eval_set VARCHAR(64), 
 	config_json JSON, 
@@ -57,13 +57,13 @@ _TABLES_UP = [
 	eval_id VARCHAR(16) NOT NULL, 
 	bucket VARCHAR(24) NOT NULL, 
 	query VARCHAR(512) NOT NULL, 
-	strategy VARCHAR(24) NOT NULL, 
+	strategy VARCHAR(24) NOT NULL DEFAULT 'hybrid_rerank', 
 	answer TEXT NOT NULL, 
 	reason TEXT NOT NULL, 
 	citations JSON, 
 	judge_model VARCHAR(64), 
-	status ENUM('未解决','已解决','无需解决') NOT NULL, 
-	seen_count INTEGER NOT NULL, 
+	status ENUM('未解决','已解决','无需解决') NOT NULL DEFAULT '未解决', 
+	seen_count INTEGER NOT NULL DEFAULT 1, 
 	first_seen_at DATETIME NOT NULL DEFAULT now(), 
 	last_seen_at DATETIME NOT NULL DEFAULT now(), 
 	resolution VARCHAR(300), 
@@ -79,11 +79,11 @@ _TABLES_UP = [
 	answer TEXT NOT NULL, 
 	section_path VARCHAR(512), 
 	content_type VARCHAR(32), 
-	is_key_clause BOOL NOT NULL, 
+	is_key_clause BOOL NOT NULL DEFAULT 0, 
 	prev_chunk_id BIGINT, 
 	next_chunk_id BIGINT, 
 	vector_id VARCHAR(64), 
-	vectorize_status ENUM('pending','done') NOT NULL, 
+	vectorize_status ENUM('pending','done') NOT NULL DEFAULT 'pending', 
 	doc_id VARCHAR(64), 
 	doc_version VARCHAR(32), 
 	doc_source VARCHAR(255), 
@@ -103,8 +103,8 @@ _TABLES_UP = [
 	carrier VARCHAR(32) NOT NULL, 
 	status VARCHAR(32) NOT NULL, 
 	latest_time DATETIME NOT NULL, 
-	is_latest BOOL NOT NULL, 
-	trajectory VARCHAR(1024) NOT NULL, 
+	is_latest BOOL NOT NULL DEFAULT 1, 
+	trajectory TEXT NOT NULL, 
 	PRIMARY KEY (id)
 )"""),
     ('messages',
@@ -128,12 +128,12 @@ _TABLES_UP = [
 	item_id VARCHAR(32) NOT NULL, 
 	product_name VARCHAR(128) NOT NULL, 
 	model_spec VARCHAR(128), 
-	quantity INTEGER NOT NULL, 
+	quantity INTEGER NOT NULL DEFAULT 1, 
 	paid_amount DECIMAL(10, 2) NOT NULL, 
 	order_time DATETIME NOT NULL, 
 	sign_time DATETIME, 
 	order_status VARCHAR(32) NOT NULL, 
-	after_sale_status VARCHAR(32) NOT NULL, 
+	after_sale_status VARCHAR(32) NOT NULL DEFAULT '无售后', 
 	PRIMARY KEY (id), 
 	UNIQUE (item_id)
 )"""),
@@ -156,7 +156,7 @@ _TABLES_UP = [
 	source_ref VARCHAR(255), 
 	question TEXT NOT NULL, 
 	answer TEXT NOT NULL, 
-	status ENUM('extracted','kept','discarded') NOT NULL, 
+	status ENUM('extracted','kept','discarded') NOT NULL DEFAULT 'extracted', 
 	created_at DATETIME NOT NULL DEFAULT now(), 
 	PRIMARY KEY (id)
 )"""),
@@ -182,8 +182,8 @@ _TABLES_UP = [
 	id BIGINT NOT NULL AUTO_INCREMENT, 
 	normalized_question VARCHAR(512) NOT NULL, 
 	ai_suggested_answer TEXT, 
-	occurrence_count INTEGER NOT NULL, 
-	review_status ENUM('待审','通过','驳回') NOT NULL, 
+	occurrence_count INTEGER NOT NULL DEFAULT 1, 
+	review_status ENUM('待审','通过','驳回') NOT NULL DEFAULT '待审', 
 	approved_answer TEXT, 
 	created_at DATETIME NOT NULL DEFAULT now(), 
 	updated_at DATETIME NOT NULL DEFAULT now(), 
@@ -195,7 +195,7 @@ _TABLES_UP = [
 	conversation_id BIGINT NOT NULL, 
 	description TEXT NOT NULL, 
 	type VARCHAR(32) NOT NULL, 
-	status VARCHAR(32) NOT NULL, 
+	status VARCHAR(32) NOT NULL DEFAULT 'open', 
 	idempotency_key VARCHAR(64) NOT NULL, 
 	created_at DATETIME NOT NULL DEFAULT now(), 
 	PRIMARY KEY (ticket_no), 
@@ -213,7 +213,7 @@ _TABLES_UP = [
 	result_summary TEXT, 
 	status ENUM('成功','失败','超时','校验拦下','权限拒绝') NOT NULL, 
 	error_message VARCHAR(512), 
-	retry_count INTEGER NOT NULL, 
+	retry_count INTEGER NOT NULL DEFAULT 0, 
 	duration_ms INTEGER, 
 	created_at DATETIME NOT NULL DEFAULT now(), 
 	PRIMARY KEY (id)
@@ -232,10 +232,10 @@ _TABLES_UP = [
 	id BIGINT NOT NULL AUTO_INCREMENT, 
 	username VARCHAR(64) NOT NULL, 
 	password_hash VARCHAR(255) NOT NULL, 
-	`role` ENUM('customer','agent','admin') NOT NULL, 
+	`role` ENUM('customer','agent','admin') NOT NULL DEFAULT 'customer', 
 	customer_id VARCHAR(16), 
 	display_name VARCHAR(64), 
-	is_active BOOL NOT NULL, 
+	is_active BOOL NOT NULL DEFAULT 1, 
 	created_at DATETIME NOT NULL DEFAULT now(), 
 	PRIMARY KEY (id), 
 	UNIQUE (username)
@@ -257,8 +257,51 @@ _TABLES_UP = [
 ]
 
 
+# 非唯一二级索引（MySQL 方言的 CreateTable 不渲染 index=True，需单独创建）
+_INDEXES_UP = [
+    """CREATE INDEX idx_conv_upto ON conversation_summaries (conversation_id, upto_msg_id)""",
+    """CREATE INDEX idx_user ON conversations (user_id)""",
+    """CREATE INDEX idx_eval_created_at ON eval_runs (created_at)""",
+    """CREATE INDEX idx_faith_status ON faith_cases (status)""",
+    """CREATE INDEX idx_last_seen_at ON faith_cases (last_seen_at)""",
+    """CREATE INDEX idx_category ON knowledge_chunks (category)""",
+    """CREATE INDEX idx_vectorize_status ON knowledge_chunks (vectorize_status)""",
+    """CREATE INDEX idx_latest ON logistics (is_latest)""",
+    """CREATE INDEX idx_logistics_order ON logistics (order_no)""",
+    """CREATE INDEX idx_waybill ON logistics (waybill_no)""",
+    """CREATE INDEX idx_conv ON messages (conversation_id, id)""",
+    """CREATE INDEX idx_customer ON orders (customer_id)""",
+    """CREATE INDEX idx_order ON orders (order_no)""",
+    """CREATE INDEX idx_name ON products (product_name)""",
+    """CREATE INDEX idx_batch_no ON qa_extraction_staging (batch_no)""",
+    """CREATE INDEX idx_status ON qa_extraction_staging (status)""",
+    """CREATE INDEX idx_conv_msg ON retrieval_snapshots (conversation_id, user_message_id)""",
+    """CREATE INDEX idx_review_status ON review_queue (review_status)""",
+    """CREATE INDEX idx_conversation_id ON tool_audit_logs (conversation_id)""",
+    """CREATE INDEX idx_tool_name ON tool_audit_logs (tool_name)""",
+    """CREATE INDEX idx_tool_status ON tool_audit_logs (status)""",
+    """CREATE INDEX idx_lcq ON topic_classifications (low_confidence_question_id)""",
+    """CREATE INDEX idx_customer_id ON users (customer_id)""",
+    """CREATE INDEX idx_created_at ON low_confidence_questions (created_at)""",
+    """CREATE INDEX idx_matched_review_id ON low_confidence_questions (matched_review_id)""",
+    """CREATE INDEX idx_source ON low_confidence_questions (source)""",
+]
+
+
+# ON UPDATE CURRENT_TIMESTAMP（SQLAlchemy 的 MySQL 方言不渲染，需 ALTER）
+_ON_UPDATE = [
+    "ALTER TABLE conversations MODIFY updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    "ALTER TABLE knowledge_chunks MODIFY updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    "ALTER TABLE review_queue MODIFY updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+]
+
+
 def upgrade() -> None:
     for _name, ddl in _TABLES_UP:
+        op.execute(ddl)
+    for ddl in _INDEXES_UP:
+        op.execute(ddl)
+    for ddl in _ON_UPDATE:
         op.execute(ddl)
 
 
