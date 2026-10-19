@@ -15,3 +15,22 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    conversation_id: int
+    role: str
+    content: str
+    tool_call_id: str | None
+    tool_calls: dict | None
+    citations: dict | None
+    feedback: dict | None
+    created_at: datetime
+
+class ConversationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime

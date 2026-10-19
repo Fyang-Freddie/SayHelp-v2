@@ -9,7 +9,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.security import hash_password
 from app.db import Base, get_db
-from app.models import User, UserRole  # noqa: F401  注册全部模型到 Base.metadata
+from app.models import (  # noqa: F401  注册全部模型到 Base.metadata
+    Conversation,
+    Message,
+    User,
+    UserRole,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,10 +27,12 @@ def project_root() -> Path:
 def create_test_app() -> FastAPI:
     """Task 2 专用最小应用：只挂 auth 路由 + 测试库。Task 5 合并进 app.main 后删除。"""
     from app.api.auth import router as auth_router
+    from app.api.conversations import router as conversations_router
     from app.auth.deps import require_role
 
     app = FastAPI()
     app.include_router(auth_router)
+    app.include_router(conversations_router)
 
     # require_role 在 P1 尚无真实端点，挂一条一次性受保护路由用于 403 断言。
     @app.get("/api/auth/_test/agent-only")
@@ -87,3 +94,49 @@ def user_factory(db_session):
         return user
 
     return _make
+
+
+@pytest.fixture()
+def user_a(user_factory):
+    return user_factory(username="user_a")
+
+
+@pytest.fixture()
+def user_b(user_factory):
+    return user_factory(username="user_b")
+
+
+@pytest.fixture()
+def conv_a(db_session, user_a):
+    conv = Conversation(user_id=user_a.id)
+    db_session.add(conv)
+    db_session.commit()
+    db_session.refresh(conv)
+    return conv
+
+
+@pytest.fixture()
+def conv_b(db_session, user_b):
+    conv = Conversation(user_id=user_b.id)
+    db_session.add(conv)
+    db_session.commit()
+    db_session.refresh(conv)
+    return conv
+
+
+@pytest.fixture()
+def conv_a_with_10_messages(db_session, user_a):
+    conv = Conversation(user_id=user_a.id)
+    db_session.add(conv)
+    db_session.commit()
+    db_session.refresh(conv)
+    for i in range(10):
+        db_session.add(
+            Message(
+                conversation_id=conv.id,
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"msg-{i}",
+            )
+        )
+    db_session.commit()
+    return conv
