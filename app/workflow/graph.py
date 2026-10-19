@@ -48,7 +48,7 @@ REFUSE_TEXT = "抱歉，暂无法确认该信息，请稍后重试或转人工�
 # 固定话术：闲聊 / 投诉 / 其他。闲聊话术必须含「SayHelp」。
 FIXED_TEXTS = {
     Branch.闲聊: "您好，我是 SayHelp 客服助手，很高兴为您服务。请问有什么可以帮您？",
-    Branch.投诉: "非常抱歉给您带来不便，我们已记录您的投诉，会尽快核实并处理，感谢您的耐心。",
+    Branch.投诉: "很抱歉给您带来不便。转人工 / 建工单功能将在后续阶段提供，当前暂无法受理投诉工单，敬请谅解。",
     Branch.其他: "抱歉，我还不能完全理解您的问题，请您换个方式描述一下，或转人工协助。",
 }
 
@@ -94,7 +94,7 @@ def build_workflow(*, chat_model, intent_model, retriever, tools, settings=setti
         if not r.passed:
             return {"answer": REFUSE_TEXT, "citations": [], "evidence": r, "passed": False}
         cites = build_citations(r.chunks)
-        evidence_text = "\n".join(c.snippet for c in r.chunks)
+        evidence_text = "\n".join(f"[{i}] {c.snippet}" for i, c in enumerate(r.chunks, start=1))
         context = [
             {"role": "user", "content": state["resolved_text"]},
             {"role": "system", "content": "参考资料：\n" + evidence_text},

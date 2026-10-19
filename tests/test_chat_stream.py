@@ -148,6 +148,41 @@ def test_sending_message_bubbles_conversation_to_top(client, user_a, conv_a, db_
     assert ids == [conv_a.id, conv_a2.id]
 
 
+def test_stream_emits_error_and_done_and_persists_on_invoke_failure(client, user_a, conv_a, db_session):
+    """invoke 抛异常：须发 error + done，且落库诚实降级 assistant，绝不裸断流。"""
+    from app.api.chat import get_workflow
+    from app.main import app
+
+    class _BoomWorkflow:
+        def invoke(self, state):
+            raise RuntimeError("boom")
+
+    app.dependency_overrides[get_workflow] = lambda: _BoomWorkflow()
+    headers = _auth(client, "user_a")
+    try:
+        with client.stream(
+            "POST", "/api/chat/stream",
+            json={"conversation_id": conv_a.id, "content": "你好"},
+            headers=headers,
+        ) as r:
+            assert r.status_code == 200
+            events = parse_sse(r.iter_lines())
+    finally:
+        app.dependency_overrides.pop(get_workflow, None)
+
+    assert [e.type for e in events] == ["status", "error", "done"]
+    assert "服务暂时不可用" in events[1].data["message"]
+
+    msgs = (
+        db_session.query(Message)
+        .filter(Message.conversation_id == conv_a.id)
+        .order_by(Message.id)
+        .all()
+    )
+    assert [m.role.value for m in msgs] == ["user", "assistant"]
+    assert "服务暂时不可用" in msgs[1].content
+
+
 def test_feedback_idempotent(client, user_a, msg_a, db_session):
     headers = _auth(client, "user_a")
     r1 = client.post(f"/api/messages/{msg_a.id}/feedback", json={"type": "up"}, headers=headers)

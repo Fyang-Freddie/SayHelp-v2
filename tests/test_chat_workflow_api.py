@@ -153,6 +153,71 @@ def test_chat_stream_product_qa_gate_fail_refuses(client, user_a, conv_a, db_ses
     assert msgs[1].citations is None  # 不得伪造引用
 
 
+def test_chat_stream_passes_prior_history_to_workflow(client, user_a, conv_a, db_session):
+    """多轮历史接入：第二次 invoke 应收到首轮 user 内容，且当前 user 消息在末尾。"""
+    from app.api.chat import get_workflow
+    from app.main import app
+
+    calls = []
+
+    class _SpyWorkflow:
+        def invoke(self, state):
+            calls.append(state)
+            return {"answer": "已作答", "citations": []}
+
+    app.dependency_overrides[get_workflow] = lambda: _SpyWorkflow()
+    headers = _auth(client, "user_a")
+    try:
+        for content in ("手机保修多久", "那电池呢"):
+            with client.stream(
+                "POST", "/api/chat/stream",
+                json={"conversation_id": conv_a.id, "content": content},
+                headers=headers,
+            ) as r:
+                assert r.status_code == 200
+                list(r.iter_lines())
+    finally:
+        app.dependency_overrides.pop(get_workflow, None)
+
+    assert len(calls) == 2
+    second = calls[1]["messages"]
+    assert {"role": "user", "content": "手机保修多久"} in second
+    assert second[-1] == {"role": "user", "content": "那电池呢"}
+
+
+def test_get_workflow_is_shared_lazy_singleton():
+    """工厂单例：两次直接调用同一对象，且仅调用 get_workflow() 不 import 重库。"""
+    import sys
+
+    from app.api.chat import get_workflow
+
+    before = set(sys.modules)
+    w1 = get_workflow()
+    w2 = get_workflow()
+    after = set(sys.modules)
+
+    assert w1 is w2
+    assert "langchain_openai" not in (after - before)
+    assert "pymilvus" not in (after - before)
+
+
+def test_build_real_workflow_retriever_is_fully_lazy():
+    """构建真实工作流本身不 import pymilvus/FlagEmbedding（检索延后到首次 retrieve()）。"""
+    import sys
+
+    from app.api.chat import _build_real_workflow
+
+    before = set(sys.modules)
+    graph = _build_real_workflow()
+    after = set(sys.modules)
+
+    assert graph is not None
+    assert "pymilvus" not in (after - before)
+    assert "FlagEmbedding" not in (after - before)
+
+
+
+
 def test_chat_stream_logistics_returns_honest_stub(client, user_a, conv_a, fake_workflow):
     fake_workflow["intent"].next_result = IntentResult(intent="物流", confidence=0.9)
     fake_workflow["chat"].next_text = "不该被调用"

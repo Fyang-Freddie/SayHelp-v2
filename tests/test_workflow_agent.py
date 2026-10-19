@@ -1,5 +1,11 @@
 from app.llm.fakes import FakeChatModel
-from app.workflow.agent import Tool, run_agent
+from app.workflow.agent import AGENT_SYSTEM_PROMPT, Tool, run_agent
+
+
+def test_system_prompt_instructs_inline_citations():
+    """系统提示须要求回答内用 [n] 标注引用，且不得杜撰超出参考资料的编号。"""
+    assert "[n]" in AGENT_SYSTEM_PROMPT
+    assert "引用" in AGENT_SYSTEM_PROMPT or "编号" in AGENT_SYSTEM_PROMPT
 
 
 class _EchoTool:
