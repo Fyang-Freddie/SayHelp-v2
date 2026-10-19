@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.security import hash_password
 from app.db import Base, get_db
+from app.main import app
 from app.models import (  # noqa: F401  注册全部模型到 Base.metadata
     Conversation,
     Message,
@@ -22,26 +22,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def project_root() -> Path:
     return PROJECT_ROOT
-
-
-def create_test_app() -> FastAPI:
-    """Task 2 专用最小应用：只挂 auth 路由 + 测试库。Task 5 合并进 app.main 后删除。"""
-    from app.api.auth import router as auth_router
-    from app.api.chat import router as chat_router
-    from app.api.conversations import router as conversations_router
-    from app.auth.deps import require_role
-
-    app = FastAPI()
-    app.include_router(auth_router)
-    app.include_router(conversations_router)
-    app.include_router(chat_router)
-
-    # require_role 在 P1 尚无真实端点，挂一条一次性受保护路由用于 403 断言。
-    @app.get("/api/auth/_test/agent-only")
-    def agent_only(user: User = Depends(require_role("agent"))):
-        return {"ok": True}
-
-    return app
 
 
 @pytest.fixture()
@@ -62,14 +42,13 @@ def db_session():
 
 @pytest.fixture()
 def client(db_session):
-    app = create_test_app()
-
     def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture()

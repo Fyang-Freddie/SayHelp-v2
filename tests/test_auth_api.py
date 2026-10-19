@@ -2,7 +2,9 @@ import datetime as dt
 
 import jwt
 import pytest
+from fastapi import HTTPException
 
+from app.auth.deps import require_role
 from app.auth.security import ALGORITHM, SECRET, create_access_token
 
 
@@ -59,10 +61,12 @@ def test_me_with_forged_token_401(client):
     assert resp.status_code == 401
 
 
-def test_require_role_wrong_role_403(client, user):
-    token = _login(client, "customer1").json()["access_token"]
-    resp = client.get("/api/auth/_test/agent-only", headers={"Authorization": f"Bearer {token}"})
-    assert resp.status_code == 403
+def test_require_role_wrong_role_403(user):
+    # require_role("agent") 返回 checker(user: User = Depends(get_current_user))；
+    # 位置传参绕过默认 Depends，直接验证角色校验逻辑（customer 非 agent → 403）。
+    with pytest.raises(HTTPException) as exc:
+        require_role("agent")(user)
+    assert exc.value.status_code == 403
 
 
 def test_me_with_expired_token_401(client):
