@@ -2,10 +2,15 @@ import json
 from collections import namedtuple
 from datetime import datetime
 
-from app.models import Conversation, Message
+import pytest
 
-# 与 app/api/chat.py 的 P1_PLACEHOLDER 逐字一致（P3 替换生成逻辑，事件契约不变）。
-P1_PLACEHOLDER = "你好，我是 SayHelp 客服助手。当前为 P1 骨架阶段，完整问答将在后续阶段接入。"
+from app.llm.client import IntentResult
+from app.models import Conversation, Message
+from app.workflow.graph import FIXED_TEXTS
+from app.workflow.route import Branch
+
+# P3 后闲聊走图内固定话术（与 app/workflow/graph.py 常量一致），不再是 P1 占位。
+CHITCHAT_TEXT = FIXED_TEXTS[Branch.闲聊]
 
 SSEEvent = namedtuple("SSEEvent", ["type", "data"])
 
@@ -41,7 +46,34 @@ def parse_sse(lines):
     return events
 
 
-def test_stream_emits_status_text_done_and_persists(client, user_a, conv_a, db_session):
+@pytest.fixture
+def fake_workflow():
+    """覆盖 get_workflow：闲聊确定性 fake（不调用主力模型 / 检索）。"""
+    from app.api.chat import get_workflow
+    from app.llm.fakes import FakeChatModel, FakeIntentModel
+    from app.main import app
+    from app.workflow.graph import build_workflow
+
+    class _DummyRag:
+        def retrieve(self, query, top_k=10):
+            raise AssertionError("闲聊不应调用检索")
+
+    chat = FakeChatModel()
+    intent = FakeIntentModel()
+    intent.next_result = IntentResult(intent="闲聊", confidence=0.9)
+
+    def override():
+        return build_workflow(chat_model=chat, intent_model=intent,
+                              retriever=_DummyRag(), tools=[])
+
+    app.dependency_overrides[get_workflow] = override
+    try:
+        yield {"chat": chat, "intent": intent}
+    finally:
+        app.dependency_overrides.pop(get_workflow, None)
+
+
+def test_stream_emits_status_text_done_and_persists(client, user_a, conv_a, db_session, fake_workflow):
     headers = _auth(client, "user_a")
     with client.stream(
         "POST", "/api/chat/stream",
@@ -52,7 +84,7 @@ def test_stream_emits_status_text_done_and_persists(client, user_a, conv_a, db_s
         events = parse_sse(r.iter_lines())
     assert [e.type for e in events] == ["status", "text", "done"]
     assert events[0].data == {"state": "processing"}
-    assert events[1].data == {"delta": P1_PLACEHOLDER}
+    assert events[1].data == {"delta": CHITCHAT_TEXT}
     assert events[2].data == {}
 
     msgs = (
@@ -63,10 +95,10 @@ def test_stream_emits_status_text_done_and_persists(client, user_a, conv_a, db_s
     )
     assert [m.role.value for m in msgs] == ["user", "assistant"]
     assert msgs[0].content == "你好"
-    assert msgs[1].content == P1_PLACEHOLDER
+    assert msgs[1].content == CHITCHAT_TEXT
 
 
-def test_stream_on_others_conversation_404(client, user_a, conv_b, db_session):
+def test_stream_on_others_conversation_404(client, user_a, conv_b, db_session, fake_workflow):
     headers = _auth(client, "user_a")
     with client.stream(
         "POST", "/api/chat/stream",
@@ -77,7 +109,7 @@ def test_stream_on_others_conversation_404(client, user_a, conv_b, db_session):
     assert db_session.query(Message).filter(Message.conversation_id == conv_b.id).count() == 0
 
 
-def test_stream_on_nonexistent_conversation_404(client, user_a, db_session):
+def test_stream_on_nonexistent_conversation_404(client, user_a, db_session, fake_workflow):
     headers = _auth(client, "user_a")
     with client.stream(
         "POST", "/api/chat/stream",
@@ -88,7 +120,7 @@ def test_stream_on_nonexistent_conversation_404(client, user_a, db_session):
     assert db_session.query(Message).count() == 0
 
 
-def test_sending_message_bubbles_conversation_to_top(client, user_a, conv_a, db_session):
+def test_sending_message_bubbles_conversation_to_top(client, user_a, conv_a, db_session, fake_workflow):
     # 同一用户的第二个会话，用于对比排序
     conv_a2 = Conversation(user_id=user_a.id)
     db_session.add(conv_a2)
