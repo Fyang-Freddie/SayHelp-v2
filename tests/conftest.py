@@ -27,12 +27,14 @@ def project_root() -> Path:
 def create_test_app() -> FastAPI:
     """Task 2 专用最小应用：只挂 auth 路由 + 测试库。Task 5 合并进 app.main 后删除。"""
     from app.api.auth import router as auth_router
+    from app.api.chat import router as chat_router
     from app.api.conversations import router as conversations_router
     from app.auth.deps import require_role
 
     app = FastAPI()
     app.include_router(auth_router)
     app.include_router(conversations_router)
+    app.include_router(chat_router)
 
     # require_role 在 P1 尚无真实端点，挂一条一次性受保护路由用于 403 断言。
     @app.get("/api/auth/_test/agent-only")
@@ -122,6 +124,15 @@ def conv_b(db_session, user_b):
     db_session.commit()
     db_session.refresh(conv)
     return conv
+
+
+@pytest.fixture()
+def msg_a(db_session, conv_a):
+    msg = Message(conversation_id=conv_a.id, role="user", content="hello")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+    return msg
 
 
 @pytest.fixture()

@@ -34,3 +34,10 @@ class ConversationOut(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+class ChatStreamRequest(BaseModel):
+    conversation_id: int
+    content: str
+
+class FeedbackRequest(BaseModel):
+    type: str  # "up" | "down"
