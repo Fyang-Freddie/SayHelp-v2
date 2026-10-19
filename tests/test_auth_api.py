@@ -1,4 +1,9 @@
+import datetime as dt
+
+import jwt
 import pytest
+
+from app.auth.security import ALGORITHM, SECRET, create_access_token
 
 
 @pytest.fixture()
@@ -58,3 +63,16 @@ def test_require_role_wrong_role_403(client, user):
     token = _login(client, "customer1").json()["access_token"]
     resp = client.get("/api/auth/_test/agent-only", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 403
+
+
+def test_me_with_expired_token_401(client):
+    expired = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+    token = jwt.encode({"sub": "1", "exp": expired}, SECRET, algorithm=ALGORITHM)
+    resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
+
+
+def test_me_inactive_user_valid_token_401(client, inactive_user):
+    token = create_access_token(inactive_user.id, inactive_user.role.value)
+    resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
