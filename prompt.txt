@@ -1,0 +1,497 @@
+SayHelp 智能客服系统
+
+我要用 Superpowers 模式开发一个完整、可运行、可验收的电商智能客服系统 SayHelp。请以资深全栈工程师、Agent/RAG 工程师的角色协助我，按本文完成需求澄清、系统设计、实施计划、开发、验证和交付。本文是最终系统需求，不是按章节逐次演示的教程。不要只完成一个聊天 Demo，也不要把中间阶段的占位方案当作最终成果。
+
+一、需求优先级与总原则
+
+1. 产品名称、客服品牌、页面标题、默认话术和文档统一使用 SayHelp；真人坐席身份应如实展示，不冒充真人。
+2. 本文中的最终要求覆盖原有分章节限制：最终系统包含多轮 Agent、混合 RAG、正式意图识别、上下文摘要、MCP、可观测性、数据飞轮及主题分类微调。分阶段交付只用于管理依赖，不得成为漏做功能的理由。已确认：去掉章节限制，整合十章已定义的最终功能；仅在排除项中提及、没有具体定义的额外功能另议，不自动扩大范围。
+3. 使用已有真实知识、历史对话、业务数据和训练数据。订单、商品、物流、在保、退货进度必须连接真实数据源或已有数据文件；不得随机生成业务数据，不得用模拟人工接入、假工单或虚假评估数字通过验收。真实接口、文件或授权缺失时说明具体阻塞，向我索取，不能假装接通。测试隔离可以采用明确标注的测试替身，但不可作为业务运行数据和最终集成验收证据。业务数据存放在\sayhelp\knowledge_db。
+4. 意图识别固定使用 jev 模型，独立于主力 Agent 模型。不得未经确认改成主力模型，也不得自动回退到其他模型。jev 的准确标识、服务地址、调用协议和配置由我确认，不自行猜测或更正拼写。
+5. 微调使用已有 train.jsonl、val.jsonl、test.jsonl，存放在\sayhelp\sft_dataset，训练、评估、导出和独立推理相关代码集中在 sft/，与客服系统代码分离。
+6. 先梳理已有仓库、数据与接口，再设计。对影响架构、权限、真实接入和验收的未知项，集中列出问题及建议方案供我审核；确认前不把建议当成既定需求。无争议的工作继续推进。
+7. 引用规则已确认：每个回答末尾呈现来源说明。知识回答附 [1]、[2] 等可点击文献编号，业务回答附可点击的查询记录编号；没有可引用依据的闲聊、澄清、拒答等话术明确注明“无外部文献”。不得伪造文献，也不得把无关文献附到回答后凑编号。
+8.所有的api等相关配置存放在.env中，按需使用，在系统全部结束之后，可以删除没有用的。数据库是我原来创建的，如果有需要可以创建新的 。
+
+二、固定技术栈与工程结构
+
+1. 后端：Python、FastAPI、SQLAlchemy；MySQL 通过 Docker 启动，作为业务数据、消息、知识原文和审核记录的权威存储。
+2. 模型与工具：LangChain、PromptTemplate、with_structured_output、@tool、trim_messages；LangGraph 实现确定性 Workflow、State、add_messages reducer、持久化 checkpointer、interrupt/resume。
+3. 模型接入：直连所配置的上游模型端点，应用侧统一使用 OpenAI 兼容协议，服务地址、模型名称、密钥等通过 .env 配置。提供 .env.example，不提交真实密钥。GPT、Claude、DeepSeek、Ollama 等仅在相应接入端确实兼容时可配置切换，不虚构原生协议兼容性。主力模型、jev、改写/摘要/裁判模型的职责和配置分别明确。
+4. 知识检索：BGE-M3 嵌入；Milvus 2.5 或以上兼容版本，锁定版本需支持原生 BM25、中文 analyzer 和 hybrid_search；dense + BM25 使用 RRF 融合；bge-reranker-v2-m3 精排。
+5. MCP：官方 Python SDK，自建物流和售后两个独立进程的 Server，使用 Streamable HTTP；客户端使用 langchain-mcp-adapters 的 MultiServerMCPClient。
+6. 可观测性：自部署开源 Langfuse，链路数据保留在自有服务器。
+7. 前端：原生 HTML、CSS、JavaScript；实现登录、聊天、历史会话、交互卡片和管理后台，不擅自替换前端框架。
+8. 主题分类：哈工大讯飞 RoBERTa-wwm-ext，全参微调；独立推理服务的具体形式在 transformers 服务或 ONNX 等方案中确认。该分类器不承担实时意图识别。
+9. 工程模块至少区分：API、认证授权、业务服务、Workflow/Agent、模型配置与 Prompt、工具注册/执行、MCP Client/Servers、知识入库与检索、会话与摘要、飞轮与评估、数据模型与迁移、前端、测试、sft/、dev-notes/。
+10. 任何涉及具体库、框架、API 的实现，先通过 Context7 MCP 查询最新官方文档及与锁定版本相匹配的接口定义。不要凭记忆写接口。工具不可用时明确说明，不能谎称已查阅。固定选型出现冲突或不能实现时，先给出证据和备选方案让我审核，不擅自替换。
+
+三、端到端主流程
+
+用户登录 → 提交问题与可信登录凭证 → 后端验证身份及会话归属 → 保存用户原话并构建本会话上下文 → 指代消解与 Query 归一 → jev 意图识别 → 代码确定性分流 → 必要的订单选择/真实数据查询 → 必要的 Query 扩写、RAG 与置信度检查 → 主力 Agent 或固定话术/人工服务选项 → 受控工具调用与人工确认 → 流式回答、引用与交互卡片 → 消息、状态、调用轨迹及日志落库 → 异步摘要、反馈归集、知识审核、评估和主题归类。
+
+图中明确划分实时同步节点、可中断交互节点和异步任务。用 State 贯穿流程，用 checkpointer 持久化并恢复执行。消息数据库用于历史原文和查询，checkpoint 用于图运行状态；设计一致性、失败恢复和重复请求处理，不能互相替代。
+
+四、登录、身份注入和权限
+
+1. 提供登录界面。聊天页面的用户身份来自登录态，每轮请求携带可验证的认证凭证，后端解析得到可信 user_id、角色和权限。不得仅信任前端提交的任意 id。
+2. 用户身份作为运行时隐藏参数，由后端注入工具执行上下文。user_id、认证令牌、权限上下文不出现在模型可见的工具参数 Schema、System Prompt、模型消息或工具结果里。模型只填写业务参数，不能指定或修改操作者身份。
+3. 认证上下文与模型上下文分离；在内置工具和 MCP 调用边界均做白名单和脱敏处理。验证实际发往模型的请求体，确认隐藏身份未泄露。
+4. 用户只能查询自己的会话、订单、工单及对应引用。会话历史、订单选择、工具调用、反馈、interrupt/resume、引用查看都必须校验归属；不能只在页面隐藏按钮。
+5. 管理员可访问管理后台，查看模型调用历史、工具审计、知识审核、低置信度问题、评估趋势和主题分布；具体可见字段及数据范围先确认。普通用户不能访问管理员接口。
+6. 工具可见性与执行权限分开控制。即使模型提出调用，执行引擎仍独立鉴权。读写权限按本地规则判定，不能相信模型或外部 MCP Server 的自我声明。
+7. create_ticket 是已明确的写工具。修改用户数据、实际退款提交等写能力，须先确认业务接口、权限、确认方式和幂等规则，再纳入统一执行引擎。
+
+五、会话、流式交互与上下文管理
+
+1. 对话接口支持多轮及 SSE 流式输出，按上游 token/delta 到达即时推送，不等整段生成结束才发送；前端逐字呈现，并说明上游 delta 可能包含多个 token。聊天采用用户/客服消息气泡排布，在本轮客服气泡中显示实际调用工具名称的轨迹小徽章，历史回载仍能查看。工具执行、检索、中断等待等阶段发送状态事件，最终回答流式呈现；约定文本、状态、引用、卡片、错误和完成事件，处理连接中断及重试，避免重复消息或重复写操作。
+2. PromptTemplate 模板化管理角色、业务红线、负面知识、证据约束和输出格式；禁止编造政策和工具执行结果；将“不承诺到账时间”等业务红线明确写成禁止行为，不能只禁止编造、却允许模型自行承诺。
+3. 用 with_structured_output 将售后描述提取为订单号、诉求类型、期望方案等固定字段，缺失项明确为空或待补充，不瞎编。
+4. 历史记录保存完整用户和客服原文。侧栏按新到旧列出当前用户会话、首问预览和已摘要标记；点击回载原聊天框并继续聊；点击“新聊天”创建独立会话，旧会话仍保留。
+5. 当前聊天区域可滚轮滑动，下方中央设置“返回最新”按钮，点击定位到最新聊天气泡；用户查看旧消息时不要被新 token 强行拉回。
+6. 提供 GET /api/conversations 和 GET /api/conversations/{id}/messages，做分页和归属校验。侧栏加载失败不阻断当前聊天。
+7. 当前会话上下文采用三层结构：
+   - 最近层：保留原文，不做摘要或改写。
+   - 中间层：用户原话不动；客服回复只保留开头几十个字；大块工具结果压缩为一行可追溯标识。
+   - 最远层：异步形成事实和诉求摘要，摘要独立存表，只追加，不反复重写旧摘要。
+8. 用 summary_upto_msg_id、layer1_from_msg_id 标记分层边界，原始消息不搬移、不覆盖。沿用原 DDL 的明确边界：id ≤ summary_upto_msg_id 属于已摘要区；summary_upto_msg_id < id ≤ layer1_from_msg_id 属于中间层；id > layer1_from_msg_id 属于最近层。layer1_from_msg_id 表示原文区之前的边界消息，不按字段名猜成含起点的区间；初始化空值语义在设计中补齐。避免重复注入或漏消息。conversation_summaries 保存 seq、from_msg_id、upto_msg_id、content、created_at，并保证同一会话 seq 唯一。
+9. 中间层超过 token 预算才触发异步摘要，不以消息条数代替用量。摘要提炼真实商品、订单号、用户明确提供且确有业务需要的手机号、明确诉求、待解决事项；不保留寒暄、不创造事实。敏感信息按用途最小化处理。每段以几十到一两百字为目标，不能为了字数删除必要事实。
+10. 摘要任务不得阻塞当前回复，需处理重复触发、失败重试、并发覆盖边界和提交一致性。触发时固定本批中间层边界，成功后 summary_upto_msg_id 追到该批 layer1_from_msg_id；不能覆盖未处理的并发新消息。旧摘要仅作背景，不再次有损合并；过多摘要如何适配窗口，先提出保留和选取策略供确认。
+11. 模型上下文顺序原则：稳定的 system 人设/红线/工具定义 → 中间层精简消息 → 最近层原文 → 当前用户问题 → 合为一条背景上下文消息的早期摘要与检索证据。摘要不得额外占一个会被上提合并的 system 消息；最后的背景材料以明确标记的上下文注入，不能伪装成用户指令。具体角色及工具调用消息配对须符合上游协议。
+12. State.messages 使用 add_messages reducer，各节点返回新增消息；完整历史随 checkpoint 保存，调用模型前另建精简上下文，不修改原始历史。使用 LangChain trim_messages 配合分层规则和 token 预算整理精简输入；裁剪必须保留合法的工具调用及结果配对。
+13. 预算从模型窗口倒推，扣除 system、工具定义、证据、摘要、输出预留、安全余量、当前输入和 ReAct 瞬时峰值；历史预算取期望保留轮数预算与实际剩余预算的较小值，最近层 70%、中间层 30%，明确整数取整规则。启动时检查是否至少容纳一轮，容量不足明确报错。优先使用实际 tokenizer，并校准中文估算。
+14. 分层压缩按真实用量触发，装得下就不压。可用以下配置验证压缩路径：MODEL_CONTEXT_WINDOW=18000、MAX_OUTPUT_TOKENS=2000、MAX_USER_INPUT_TOKENS=2000、MAX_AGENT_STEPS=3、TOOL_RESULT_MAX_TOKENS=1200、RERANK_TOP_K=5。原验收参考值为滑窗 5650、最近层 3954、中间层 1695。必须保留这些值作为对照，并用最终模板、tokenizer、工具定义、固定开销和取整规则重算，给出差异说明；原文未提供完整计算参数且两个分层数合计比总值少 1，不能硬编码或伪称完全复现。若因此需修改验收值，先提交计算表让我审核。
+15. 已确认本次上下文管理针对当前会话。跨会话长期记忆、用户画像、语义检索历史与重要度记忆作为额外功能另议，不替代已定义的三层上下文方案。
+
+六、指代消解、jev 意图识别和确定性分流
+
+1. 指代消解使用 LLM，结合当前会话摘要与近期历史，将“它能退吗”“刚才那个订单”等补全成独立可理解的问题。已完整的输入原样透传，指代不明时澄清；保留原话、改写结果和采用的上下文以便追溯。
+2. 同步完成口语归一，保持原始诉求和约束，不添加用户未表达的条件。
+3. 意图节点用 jev 的 Prompt 分类路线，不训练新的意图分类器；jev 在该节点仅判断意图，严格只输出 intent、confidence 两个字段的可校验 JSON：{"intent":"类别","confidence":0.0}。枚举物流、订单、商品咨询、退款退货、售后、投诉、闲聊和其他；提供边界 few-shot；结构错误、超时和低置信度有明确兜底，不强塞类别。
+4. 分类置信度与检索 evidence_confidence 分开存储、校准和使用；不要把模型自报置信度当作天然准确概率。意图节点不负责搜集全部槽位，也不生成业务回答。
+5. 路由规则写在代码中：
+   - 商品咨询：强制检索知识，置信度足够后进入主力 Agent。
+   - 退款退货：获取当前用户真实订单 → 必要时订单选择 → Query 扩写 → 强制检索政策 → 置信度检查 → Agent 基于订单和政策判断。
+   - 售后：按 ch6 的正式版要求，与退款退货一致采用订单 → Query 扩写 → 强制政策检索 → 置信度检查 → Agent 的确定性子流程，相关业务查询通过售后 MCP 工具完成，不擅自增加跳过政策的分支。
+   - 物流、订单：直接进入 Agent，通过真实业务工具查询，不套用无检索证据的 RAG 置信度闸。
+   - 投诉：返回安抚话术及独立的“转人工”“建工单”选项，不进入主力 Agent，不自动执行动作。
+   - 闲聊：意图识别后使用固定 SayHelp 话术，不再调用主力生成模型；不能宣称这一轮完全没有模型调用。
+   - 其他：使用澄清或能力边界话术，不猜业务动作。
+6. Query 扩写仅用于退款退货、售后等需要的检索场景，输出 {"queries":[...]}；多查询检索后去重融合。简单 FAQ 不扩写。同义词扩展只作用于查询，知识库不重复存多份。
+7. 缺订单号时调用有权限的真实订单列表，通过 LangGraph interrupt 向前端展示订单卡片；用户选择后校验订单归属并 resume。无订单或接口失败如实说明，不能猜订单。
+8. 退款表单提供固定退款原因类目的下拉选择框，由用户自行点选；意图节点和主力 Agent 都不以追问退款原因作为继续对话的前置条件。其他必要的需求澄清由主力 Agent 完成，意图节点只判断要做什么。实际提交接口和写权限需确认；不得仅凭展示表单就声称退款已提交。
+
+七、知识入库、混合检索、置信度与引用
+
+1. 对真实 Markdown 政策、商品 FAQ、售后手册等做标题结构感知切分；超长段递归切分，块间添加重叠，重叠裁到最近句号，不留半截话；遇到没有句号的超长文本或特殊格式时明确切分规则并验证语义完整性；大表按行拆分时每块复制表头。
+2. 定时将真实历史客服对话分批交给 LLM 抽取问答对，先进入 qa_extraction_staging，再整体去重并按质量规则入库。记录来源批次和来源会话，防止模型错误答案未经核验污染知识库；审核规则需明确。
+3. 每块包含 category、questions、answer，三者拼接为向量化文本。FAQ 和抽取 QA 使用真实问法；政策手册用章节标题作为 questions，上级标题路径作为 category。
+4. 元数据包括 section_path、content_type、is_key_clause、prev_chunk_id、next_chunk_id，并补足引用需要的文档标识、版本、位置和来源地址。原有四类元数据不进入向量文本，但可用于过滤、溯源和条款上下文恢复。
+5. MySQL knowledge_chunks 是原文权威源，Milvus knowledge 是检索索引。先写 MySQL 并标 pending，再向 Milvus 按稳定主键 upsert，成功后回填 vector_id 并标 done。中断、重复运行及并发重试不产生重复；知识更新或删除也要保持索引一致。
+6. 最终 query_faq 使用混合检索，保持外部入参出参契约不变，内部检索策略升级不影响调用方；确实无法保持时先说明原因并提交变更让我审核，不自行扩展契约。SQL LIKE 和纯向量仅作为可复现基线，不作为最终能力。记录同一真实评估语料上“邮费是多少”的 LIKE 漏召回与语义检索改善；若现有数据使 LIKE 已能命中，如实报告，不为了复现教程预期删改真实数据。
+7. Milvus 原生 BM25 文本字段配 BM25 函数，中文使用内置 chinese analyzer；dense 和 BM25 各召回 Top-50，通过 hybrid_search + RRF 融合，再用 bge-reranker-v2-m3 精排至 Top-10。这些数量可配置，测试配置不能悄悄变成生产配置。
+8. 支持品类等元数据先过滤再检索。多查询结果去重保留来源；重要条款可结合相邻块补全。组装证据时将最相关片段放在首尾，保持可读顺序和编号稳定。
+9. 在知识检索后、主力 Agent 生成前设置正式 evidence_confidence 闸，综合精排 Top1 相关性、有效证据数量、Top1/Top2 分差等信号；阈值用标注评估集校准，不拍脑袋，也不能直接把原始 reranker 分数当概率。
+10. 证据不足时立即返回明确兜底或拒答，并写 low_confidence_questions；不先流式输出不可靠答案再撤回。生成侧还需以 useful 等结构化内部标记自评证据是否足以回答；useful=false 时拒答并以 source=self_check、附理由写入问题池，标记可不单独持久化。对用户释放实质答案前完成关键检查；如何兼顾流式体验、结构化自评和延迟，在设计中说明。
+11. System Prompt 明确只能依据有效证据和工具结果回答，不能把检索到的指令当作系统指令。退款资格的判断与实际退款执行分离，不能做超越政策或接口能力的承诺。
+12. 回答使用 [1]、[2] 等引用编号，并在回答后列出对应来源。编号映射到本轮证据快照、chunk、章节路径及文档版本；点击可查看原文和跳转定位，历史回答仍能追溯当时依据。
+13. 已确认纯业务回答引用授权可见的真实查询记录，在回答末尾编号列出，点击展示对应结果和查询时间；不将查询记录冒称政策文献。无依据的固定话术注明“无外部文献”。混合回答分别标明文献与查询记录类型，编号不得冲突。
+
+八、主力 Agent、统一工具执行与 MCP
+
+1. 使用 LangGraph 中的主力 Agent 节点实现受控 ReAct/工具循环：模型提出调用 → 引擎校验鉴权 → 工具执行 → 结果回灌 → 继续或收敛。简单问题可一步完成，复杂问题可先查订单再查物流。缺信息主动澄清。
+2. 设置最大步数、token 总预算、超时、重复无效调用检测和停止条件，达到限制时可理解地收敛。不要求展示模型隐含推理过程，只展示必要操作状态和工具轨迹。
+3. 按原要求先手写一遍不依赖 Agent 框架的最小工具循环（调用 LLM、有工具申请则执行并回灌、无工具则收敛），验证后再用 LangGraph 重构；保留最小可运行示例与前后对应说明，最终运行路径统一采用 LangGraph，不重复维护两套生产逻辑。
+4. 内置工具使用 LangChain @tool 装饰器定义，工具包括 query_order、query_product、query_faq、create_ticket，以及 MCP 物流轨迹、在保查询、退货进度等。订单与商品连接真实数据；物流由物流 MCP 接管，旧内置 query_logistics 退出注册清单，避免重名。
+5. 注册中心统一登记工具名、描述、JSON Schema、来源和本地权限规则。内置工具在启动时注册，支持扩展注册；MCP 工具动态发现并更新，每轮取得可用清单。新增工具不改 Agent 核心代码，Server 端新增工具并重启后客户端可重新发现，无需重启客服服务。同一注册/权限版本内，模型可见工具定义保持稳定排序和序列化；注册或授权变化时更新版本并重建前缀，同一轮内工具 Schema 使用一致快照；执行权限仍在每次执行和 resume 时重新校验，不能用旧权限快照放行已撤销权限，也不能为保留缓存而忽略新工具或权限变更。
+6. 调用前统一验证类型、必填字段和取值范围。校验失败转成结构化工具结果回灌模型，允许修正或追问，不仅抛异常。
+7. 隐藏身份只能由引擎注入。业务参数也需验证资源归属和数据访问范围，不能靠模型承诺正确。
+8. 所有工具统一处理超时、重试、错误与结果格式。仅瞬时网络故障可按策略重试；空结果和参数错误不重试；写操作默认不自动重试，超时状态不能假定“未执行”。
+9. 区分参数不合法、业务无结果和真实故障；结果只保留回答必需字段，内部枚举转换为可理解内容，JSON 中文不转义，禁止输出认证凭证和隐藏身份。
+10. tool_audit_logs 记录 conversation_id、tool_call_id、工具名、builtin/mcp 来源、MCP Server、脱敏参数、结果摘要、状态、错误、重试次数、耗时和时间；成功、失败、超时、校验拦下和权限拒绝都记录。审计表不挂外键；审计写入失败不反向阻断工具，但应告警并具备可追踪的补偿路径。
+11. 两个 MCP Server 使用真实数据源、独立进程部署；故障隔离、鉴权传递和客户端动态发现机制需说明。工具用途声明不可信，写权限由本地白名单决定。
+
+九、建工单、转人工和前端确认
+
+1. 转人工与建工单是独立能力，按钮彼此不绑定。除投诉固定分支外，主力 Agent 判断适合人工处理时也可在回复中提出转人工或建工单建议，可只给一个或同时给两个；建议只呈现独立按钮，不自动转接或写工单。用户未选择时不自动执行，可以继续正常聊天。
+2. 转人工必须连接真实坐席系统或已确认的真实人工工作台。区分等待接入、已接通、失败、结束状态；只有真实接通后才展示已转接成功，不显示虚构真人问候。
+3. 聊天中明确要求建工单时，Agent 核对工单类型、问题描述等必填项，不足则追问；齐全后申请 create_ticket，由执行引擎 interrupt，向前端推送预览卡片和“确认提交”“取消”。
+4. 确认请求与当前用户、会话、待执行参数、工具调用绑定，防止篡改、过期确认、重复点击和跨会话 resume。服务端校验后执行一次，写 tickets 并返回真实工单号；取消不写入，按权限拒绝记审计并注明用户取消。
+5. 投诉分支的“建工单”按钮可作为用户主动授权入口；只有按钮已明确展示提交内容且必要字段齐全时，点击才等价于确认。信息不齐仍须补齐，不得借这条路径绕过校验。该差异在 UI 和接口契约中写清。
+6. 工单确认、订单选择和退款原因表单均支持等待、取消、恢复和失败状态；刷新及重连后不能重复执行已完成的写操作。
+
+十、数据模型与持久化约束
+
+最终迁移必须覆盖以下实体，并保留原需求的字段语义；可以补充必要索引和版本字段，但不能无说明删除关键能力。统一 InnoDB、utf8mb4；执行中文 DDL 前正确设置连接字符集。
+
+1. 用户/认证/角色权限：结构按现有身份系统确认，避免重复造账户源。
+2. faq：保留原有问题、答案、分类数据及迁移方案，最终知识检索归入统一知识库。
+3. conversations：用户归属、处理状态、创建时间、摘要投影、summary_upto_msg_id、layer1_from_msg_id。
+4. messages：会话、role、内容、工具调用申请、tool_call_id、创建时间，并支持回答引用、反馈和当轮检索的关联。明确 user/assistant/tool 等角色存储约定。
+5. tickets：真实工单号主键、会话、问题描述、类型、状态、创建时间及幂等关联。
+6. knowledge_chunks：category、questions、answer、section_path、content_type、is_key_clause、前后块指针、vector_id、pending/done 状态、创建/更新时间及来源信息。
+7. qa_extraction_staging：batch_no、source_ref、question、answer、extracted/kept/discarded 状态、创建时间。
+8. conversation_summaries：会话、分段序号、覆盖消息区间、摘要正文、创建时间。
+9. low_confidence_questions：来源会话及当轮消息关联、raw_question、source、reason、retrieved_chunks、matched_review_id、创建时间；source 枚举 retrieval_low_conf、self_check、user_feedback。
+10. review_queue：normalized_question、ai_suggested_answer、occurrence_count、待审/通过/驳回状态、approved_answer、创建/更新时间。
+11. tool_audit_logs：按统一执行引擎要求保存，不挂外键。
+12. eval_runs：定时/手动触发方式、评估集条数、metrics JSON、时间；补充评估集、配置及模型版本，保证趋势可比。
+13. faith_cases：eval_id 唯一、bucket、query、strategy、answer、reason、citations、judge_model、处置状态、seen_count、first_seen_at、last_seen_at、resolution、resolved_at。
+14. topic_classifications：关联低置信度问题、多标签 labels、分类时间及模型版本。
+15. 反馈及每轮检索快照：需要可持久化关联用户、会话、用户问题、回答和证据，具体独立表或扩展字段在设计中确认。
+16. 原文对工具结果存在“消息中落结果”与“不落消息表”的冲突。先提交统一存储方案：保存可审计可恢复的完整或限额结果到合适存储，messages 保留引用/必要记录，模型上下文按预算裁剪；最终方案须保证历史回放、checkpoint 恢复、事后反馈回捞证据和审计都成立，不静默丢弃结果。
+
+十一、可观测性、管理后台与数据飞轮
+
+1. 接入自部署 Langfuse，通过环境变量配置；沿用在 LangGraph 图层统一挂接一次回调的要求，避免重复 trace。先用 Context7 验证所锁定版本是否支持在编译时挂接；若实际接口只支持调用配置等其他位置，先提交兼容性证据及等效方案让我审核，不能自行改动固定实现要求。记录每个节点的模型输入输出、检索、工具、tokens、耗时、错误和意图元数据。版本核查结果和获准的接入位置必须记录在开发笔记。
+2. 每轮调用模型前，把本次实际发送的上下文记录到 log/app.log，并遵循敏感信息访问控制；认证凭证不得记录。主力 Agent 调用前记录 model_ctx，包含摘要全文、滑窗逐条消息、窗口条数和 token 估算；指代消解和意图识别共用的历史在每轮记录 history_ctx，包含摘要行与滑窗消息，即使该轮最终走闲聊等兜底、不进入主力 Agent 也不能漏记。发送前日志与实际输入应一致，不能只在响应完成后补写。
+3. log/app.log 记录摘要触发、开始、完成、跳过和失败，包含覆盖边界与耗时；定义轮转和保留策略。管理员可查看模型调用历史，普通用户不得看到他人信息和内部 trace。
+4. 按意图统计模型 token 花销、调用量和耗时。金额根据已确认模型费率估算，无费率时只展示 token，不编造费用。
+5. 三个入口归集低置信度问题：检索证据不足、生成侧自评不足、用户点 👎。记录原始问题、当轮引用/检索快照及得分、原因和入口。
+6. 事后 👎 从原消息所属轮次回捞检索证据，不能拿当前最新检索结果代替；该轮未检索则明确为空。其他采集失败须区分“未检索”和“快照丢失”。
+7. 每条回答左下角显示 👍/👎。反馈成功后点亮选择、显示“已反馈”并锁定；后端保证幂等，不只依赖前端。👎 对应用户问题进入问题池。
+8. 飞轮流水线：原话标准化成 FAQ 式问题 → 生成仅供审核的示例答案 → 由 LLM 判断与待审问题是否语义相同（不能只用字符串相等代替） → 合并或新建 review_queue → 人工审核 → 核准答案经统一知识入库流程写 MySQL/Milvus → 更新检索可见状态 → 回归评估。
+9. 查重命中只累加 occurrence_count，low_confidence_questions.matched_review_id 指向归并缺口；重复执行不能反复累加同一事件。AI 示例答案未经人工核准不进入正式知识库。
+10. 审核后台展示标准化问题、出现次数、示例答案、状态，详情可看原始问题和当时证据，帮助区别“知识缺失”和“检索失败”。通过时填写核准答案；驳回记录理由。向量化尚未完成时不能显示“已可回答”。
+11. 自动评估定时及手动执行，指标落 eval_runs，展示至少两轮可比趋势、退化情况和运行配置。
+12. 忠实度编造个案进入 faith_cases，按 eval_id 一题一行；再次发生更新最新答案/原因/证据快照并增加 seen_count。已解决或无需解决的个案复发时恢复未解决，保留历史处置时间用于提示复发。
+13. citations 保存当轮提供给生成模型的证据全集及编号映射，区分“提供了哪些”与“答案引用了哪些”。标已解决或无需解决必须填写处置说明，退回未解决清空当前处置说明。
+14. 后台包含模型调用历史、工具审计、知识审核、低置信度详情、评估趋势、编造个案和主题分布；具体管理员权限范围由我审核。
+
+十二、主题分类微调与 sft/ 隔离
+
+1. 使用已有 train.jsonl、val.jsonl、test.jsonl，先核对路径、编码、字段、标签分布、去重和集合交叉污染。保留原要求：训练/验证/测试按 80/10/10 分层，各类别尽可能保持比例。先检查已有三份文件是否符合；符合则直接使用，不重复拆分；不符合或小样本多标签无法精确分层则报告实际比例和原因，向我确认保留现状还是重划分，未经确认不重划也不悄悄取消比例要求。
+2. 不因为某类数据不足就让大模型凭空生成模拟问题补足。报告真实数据缺口并提出采集方案。保留原文的训练集增强要求：仅基于真实训练样本做同义词替换和句式微调，保持业务事实、诉求与标签，记录父样本并复核质量；只能扩训练集，不能污染验证/测试集。不将这些变换用作“虚构新业务事实、模拟数据补量”的借口。若某种变换需要生成原文没有的事实，停止该变换并请我审核。
+3. 清洗包括脱敏、格式统一、错字处理，保留原始数据及可追溯转换记录。
+4. 全系统维护唯一权威术语表，以退换货、物流、尺码、发票四类领头；每一类都必须配一句边界说明，不能只给近邻示例。17 类为：退换货、物流、尺码、发票、质量问题、运费、优惠活动、价保、支付、订单修改、库存补货、商品信息、保修维修、账号、会员积分、评价、其他。
+5. 边界：维修归保修维修，退货归退换货；运费管费用，物流管货物运输；价保指补差价，优惠活动指券和满减。定义“其他”与具体标签是否可共存，交由我审核。
+6. 多标签按句子真实表达的诉求标注，不多打、不漏打。例如“买大了想退”应涵盖尺码和退换货。采用大模型按术语表预标、人工抽审的路线，已有高质量标注不擅自覆盖。
+7. RoBERTa-wwm-ext 全参微调，配适用于多标签的训练目标、阈值选择、正则化和早停；验证集用于模型与阈值选择，测试集仅做最终评估，不用于调参。不得擅自改为 LoRA/QLoRA 或用它替代 jev。
+8. 输出每类精确率、召回率、F1，补充 macro/micro 指标和每类二元混淆矩阵；多标签任务不能误用单标签互斥混淆矩阵。人工复核错判样例并解释边界问题。
+9. sft/ 内包含数据说明/校验、标签规范、清洗、预标审核流程、训练配置、训练入口、评估、导出、独立推理服务、报告与使用说明。客服系统通过清晰接口调用，不依赖训练运行环境。
+10. 分类器在旁路按批量运行，低置信度问题达到已配置的批量触发条件时执行归类，结果写 topic_classifications；实时对话主链路不调用它，也不通过逐轮异步请求变相调用它。服务和任务具备批次、版本及失败重跑机制。
+11. 后台展示各主题问题数；多标签统计可能超过去重问题总数，页面必须说明统计口径。
+
+十三、评估与整体验收
+
+先基于真实资料建立带 ground-truth、难度梯度和 query 类型分桶的评估集，固定版本；可人工编写真实业务测试问法，不能伪造业务事实。质量阈值、规模、延迟和资源目标由我审核，不预先宣称达到未测量指标。
+
+A. 登录与权限
+- 登录后可聊，每轮身份可验证；伪造 user_id、越权读历史/订单/引用、越权调用及跨会话 resume 均失败。
+- 检查发送给模型的真实请求，隐藏身份、密钥及权限参数未进入模型可见内容。
+- 管理员能查看授权信息，普通用户不能访问管理接口。
+
+B. 聊天与历史
+- curl 能验证 SSE 实时 token/delta 推送；浏览器能看到气泡逐字输出、工具状态、工具名称徽章及最终引用。
+- 多轮上下文连贯，结构化售后信息可解析且缺失字段不编造。
+- 新聊天、历史切换、完整回放、滚动和“返回最新”可用；反馈只提交一次。
+
+C. 意图、指代与分流
+- 使用真实多轮样例验证物流 → 退款 → 物流切换，检查 jev 调用及 JSON。
+- 模糊指代可正确补全或澄清，未知问题归其他；投诉不进主力 Agent，闲聊不调用主力生成模型。
+- 退款/售后按订单 → 扩写 → 政策 → 置信度 → Agent 执行，缺订单时真实订单选择可恢复。
+
+D. RAG 与引用
+- 对比纯向量、纯 BM25、混合、混合加 Rerank 四策略，报告 Recall@K、MRR、Faithfulness，并按 query 类型分桶。
+- “邮费是多少”等换说法可召回正确知识，具体型号可由 BM25 路径命中。
+- 建库中断可补齐重跑，更新删除保持一致；引用可定位到当时原文。
+- 无知识或证据不足时先拒答并入池，不流出编造答案。
+
+E. 工具与人工交互
+- 用真实数据完成查订单、查商品、查物流、在保与退货进度；复杂任务能多步调用并有停止条件。
+- 新工具通过注册或 MCP 重新发现即可使用，不改 Agent 核心、不重启客服服务。
+- 参数错误、查询落空、临时故障、超时、权限拒绝都有正确结果及审计；写超时不自动重试。
+- 建工单补齐信息、预览确认后只生成一张真实工单；取消无工单；重复点击不重复写入。
+- 转人工是真实接入，未接通不冒报成功；两个按钮独立；非投诉对话中 Agent 也能仅建议人工处理，不自动执行。
+
+F. 上下文
+- 连续二十轮以上不超预算；使用约定的默认模型及默认配置跑二十轮，不触发降级或摘要。若默认窗口确实不足，提交预算差异与配置调整方案审核，不能改用另一个足够大的配置后宣称默认验收通过。
+- 缩小预算后可观察最近层降级、中间层超预算、异步摘要、边界更新及早期事实回忆。
+- 完整原文不被裁剪覆盖，工具消息合法；摘要不阻塞当前轮，日志可检查 model_ctx/history_ctx。
+
+G. 飞轮、观测与评估
+- Langfuse 可展开完整请求链，按意图汇总 tokens；认证秘密未泄露。
+- 三个问题池入口均有效，👎 精确关联原轮次；审核页能看原话和证据。
+- 审核核准并完成索引后，相同问题可获得有依据回答，闭环可演示。
+- 至少两轮评估显示可比趋势，faith_cases 能累加、处置并识别复发。
+
+H. 微调
+- 三份 JSONL 校验及数据隔离通过，80/10/10 分层与任何已审核偏差有记录；训练集增强不进入验证/测试集；sft/ 可独立训练、评估和启动推理。
+- 提供真实测试集各类指标、二元混淆矩阵及人工复核结果。
+- 对真实问题批量归类并显示主题分布；“买大了想退”可命中相应多标签；分类任务不阻塞聊天。
+
+十四、工作方式、阶段和交付
+
+1. 使用 Superpowers 流程，按任务阶段自动触发适用技能，开展后端和核心能力设计、计划、实施、评审、验证及收尾；先读项目已有约束，发现冲突及时说明。
+2. 可单测代码按 TDD 开发；纯 Prompt、数据和训练任务用标注样例或评估集验证代替代码 TDD，不编写毫无判别力的测试凑数量。
+3. 聊天页面及交互卡片等前端按 Vibe Coding 方式，根据我的效果反馈直接迭代，不强套 brainstorm、TDD、code review；但仍需验证真实接口、权限、流式展示和交互状态。
+4. 阶段建议：需求与数据核查 → 架构和契约 → 登录/会话/流式底座 → 知识入库与混合检索 → jev 分流及 Agent → 工具权限/MCP/人工确认 → 上下文分层 → 观测与飞轮后台 → sft 训练与旁路服务 → 全链路验收。可按依赖调整，但不遗漏最终需求。
+5. 保留原定 dev-notes/ch01.md、ch02.md、ch03.md、ch04.md、ch05.md、ch06.md、ch07.md、ch08.md、ch09.md、ch10.md 路径，按能力归属实时追记；跨章节阶段可追加总索引，但不能用一个总文件替代这些记录。保留 ch01—ch10 的需求追踪表。每次设计定稿、计划评审、任务完成、review、finish 后立即记录：我的关键原话；关键产物及 spec/plan/报告路径；我的拒绝或纠偏；失败及返工。不得结束时一次性补写。
+6. 建立需求—实现—验收映射，明确已完成、待验证和外部阻塞；没有跑通的功能不标完成。
+7. 交付源代码、数据库迁移、配置模板、启动/部署说明、真实数据导入说明、Prompt 文件、接口及 SSE 契约、演示命令、测试结果、检索对比报告、微调报告、管理后台使用说明及 dev-notes 路径。
+8. 演示涵盖真实登录与越权拦截、知识引用、多步工具、退款订单选择、工单确认、真实人工接入、长对话摘要、差评入池、人工审核回库和批量主题分类。
+
+十五、已确认规则与实施前待审核事项
+
+已确认的两点不要重复询问：知识回答引用文献、业务回答引用查询记录、无依据话术注明无外部文献；去除章节限制并整合十章已定义的最终功能，额外功能另议。以下只涉及实施资料或真实冲突：请先查看已有仓库和配置，能够从现有材料确认的不要重复问；仍未明确的，整理成简短问题和推荐方案向我确认：
+
+1. jev 的准确模型名、服务提供方、地址、协议、认证方式、上下文窗口，以及错误/低置信度处置；主力、指代消解、摘要和裁判模型分别用什么。
+2. 真实知识库、业务数据库/API、历史对话、train.jsonl/val.jsonl/test.jsonl 的路径、结构及可用权限。
+3. 登录使用现有身份系统还是本地账户；角色、管理员可见数据范围、读写权限矩阵。
+4. 人工客服系统接口或人工工作台方案；退款表单是否实际提交，修改用户数据是否属于本次交付，若是需明确接口与写确认。
+5. 已确认引用类别；实施时仅补充引用页面、真实文献地址及查询记录的展示契约，不再询问是否允许无文献话术。
+6. 工具结果、消息与 checkpoint 的统一存储方案，以及原文与模型输入日志的脱敏、可见性和保留期限。
+7. 若已有三份数据不符合 80/10/10 分层要求，确认是否重划分；多标签“其他”规则、硬件和训练预算。训练样本增强按已定义要求实施，只有与“不造模拟业务数据”实际冲突的变换才提请审核。
+8. 意图、RAG、分类质量目标，延迟和容量目标，证据阈值校准方法及评估集规模。
+9. 跨会话长期记忆、用户画像、历史语义检索、重要度记忆、更多外部系统、应用自身 Skill 机制和额外微调方案已确认另议，不再作为本次实施的范围阻塞。不要把开发用 Superpowers skills 与应用自身 Skill 机制混为一谈。
+10. 售后沿用 ch6 正式子流程，不再重复询问是否可改成业务直查；仍需确认多意图同句优先级。另核对上下文预算参考值、Langfuse 回调位置的版本兼容性；发生差异时先给出证据再请我审核。
+
+请从“现状与真实资源清单、需审核的问题、完整流程图和分阶段计划”开始。先确认影响架构和权限的决策，再按计划交付完整 SayHelp 系统。
+
+
+附录 A：原始数据库 DDL 基线（保留字段、类型、默认值、索引和外键语义）
+
+以下 SQL 从原始需求逐条保留，作为设计和迁移核对依据，不是本系统完整部署脚本，不能跳过前置表直接执行。最终实现须通过统一迁移工具按依赖顺序整合；新增用户、业务基础表、消息引用/反馈、topic_classifications 等缺失结构仍需补齐。不得仅保留字段名而丢失原 DDL 的唯一约束、外键删除语义、索引、枚举和默认值；需要变更时说明原因并让我审核。
+
+特别核对：knowledge_chunks 的前后块外键 ON DELETE SET NULL；conversation_summaries 的 (conversation_id,seq) 唯一约束及闭区间；faith_cases.eval_id 唯一；review_queue 先于 low_confidence_questions.matched_review_id 外键创建；matched_review_id 的 ON DELETE SET NULL；tool_audit_logs 无外键。conversations.summary 是分段摘要的投影，不是将旧段重新摘要的结果。
+SET NAMES utf8mb4;
+
+CREATE TABLE knowledge_chunks (
+  id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'chunk 主键,与 Milvus 集合主键对齐',
+  category         VARCHAR(255)    NOT NULL                COMMENT '分类 / 上级标题路径,进向量化文本',
+  questions        TEXT            NOT NULL                COMMENT '问法或本节标题,多个问法换行分隔,进向量化文本',
+  answer           TEXT            NOT NULL                COMMENT '正文答案,进向量化文本',
+  section_path     VARCHAR(512)    NULL                    COMMENT '章节路径,元数据,溯源用,不进向量',
+  content_type     VARCHAR(32)     NULL                    COMMENT '内容类型:faq / policy / manual 等,元数据',
+  is_key_clause    TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '是否关键条款,0 否 1 是,元数据',
+  prev_chunk_id    BIGINT UNSIGNED NULL                    COMMENT '前一块指针,元数据',
+  next_chunk_id    BIGINT UNSIGNED NULL                    COMMENT '后一块指针,元数据',
+  vector_id        VARCHAR(64)     NULL                    COMMENT 'Milvus 集合 knowledge 里的主键,写入后回填',
+  vectorize_status ENUM('pending','done') NOT NULL DEFAULT 'pending' COMMENT '待向量化 / 已向量化,双写幂等靠它',
+  created_at       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  KEY idx_category (category),
+  KEY idx_vectorize_status (vectorize_status),
+  CONSTRAINT fk_chunks_prev FOREIGN KEY (prev_chunk_id) REFERENCES knowledge_chunks (id) ON DELETE SET NULL,
+  CONSTRAINT fk_chunks_next FOREIGN KEY (next_chunk_id) REFERENCES knowledge_chunks (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库 chunk 原文权威源';
+
+CREATE TABLE qa_extraction_staging (
+  id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '暂存行主键',
+  batch_no         VARCHAR(64)     NOT NULL                COMMENT '抽取批次号,一批几十个会话跑一次,分批防串味、按批追溯',
+  source_ref       VARCHAR(255)    NULL                    COMMENT '来源会话 / 导出文件标识,溯源用,不入最终知识库',
+  question         TEXT            NOT NULL                COMMENT 'LLM 从会话抽出的用户问法',
+  answer           TEXT            NOT NULL                COMMENT 'LLM 从会话抽出的客服答案',
+  status           ENUM('extracted','kept','discarded') NOT NULL DEFAULT 'extracted' COMMENT '已抽出待去重 / 去重保留 / 去重丢弃',
+  created_at       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '抽取写入时间',
+  PRIMARY KEY (id),
+  KEY idx_batch_no (batch_no),
+  KEY idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='历史对话抽 QA 的离线中转暂存表:分批抽取、整体去重,保留项入 knowledge_chunks,建库完成可清空';
+
+SET NAMES utf8mb4;
+
+CREATE TABLE low_confidence_questions (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  conversation_id BIGINT UNSIGNED NULL                    COMMENT '来源会话',
+  raw_question    TEXT            NOT NULL                COMMENT '用户原话,带情绪口语',
+  source          ENUM('retrieval_low_conf','self_check','user_feedback') NOT NULL COMMENT '入池入口:检索证据低 / 生成自评不足 / 用户反馈未解决',
+  reason          TEXT            NULL                    COMMENT '判不能的原因,留作复盘',
+  created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入池时间',
+  PRIMARY KEY (id),
+  KEY idx_source (source),
+  KEY idx_created_at (created_at),
+  CONSTRAINT fk_lcq_conversation FOREIGN KEY (conversation_id) REFERENCES conversations (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='低置信度问题池';
+
+CREATE TABLE faith_cases (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  eval_id       VARCHAR(16)     NOT NULL                COMMENT '评估集题号,如 A43;一题一行',
+  bucket        VARCHAR(24)     NOT NULL                COMMENT '题目所属桶:A_policy / B_model / C_colloquial / E_multi',
+  query         VARCHAR(512)    NOT NULL                COMMENT '用户问题原文',
+  strategy      VARCHAR(24)     NOT NULL DEFAULT 'hybrid_rerank' COMMENT '产出这条答案的检索策略',
+  answer        TEXT            NOT NULL                COMMENT '被判编造的那版生成答案原文',
+  reason        TEXT            NOT NULL                COMMENT '裁判给的理由:编在哪一句',
+  citations     JSON            NULL                    COMMENT '这一轮喂给模型的 Top-K 证据全集快照:[{n,chunk_id,section_path,question,answer}];答案里的角标 [n] 就是这份列表的序号,答案通常只引用其中两三条;老数据没记为 NULL',
+  judge_model   VARCHAR(64)     NULL                    COMMENT '判这条的裁判模型',
+  status        ENUM('未解决','已解决','无需解决') NOT NULL DEFAULT '未解决' COMMENT '处置状态,人工点按钮改',
+  seen_count    INT UNSIGNED    NOT NULL DEFAULT 1      COMMENT '被判编造的累计次数(跨轮)',
+  first_seen_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '第一次被判编造的时间',
+  last_seen_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '最近一次被判编造的时间',
+  resolution    VARCHAR(300)    NULL                    COMMENT '处置说明:标已解决要写清怎么解决的,标无需解决要写清为什么不用改;退回未解决时清空。空着的处置在台账上等于没有交代',
+  resolved_at   DATETIME        NULL                    COMMENT '最近一次被标为已解决/无需解决的时间;复发后仍保留,用来标「复发」',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_eval_id (eval_id),
+  KEY idx_status (status),
+  KEY idx_last_seen_at (last_seen_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ch04 忠实度编造个案台账';
+
+SET NAMES utf8mb4;
+
+ALTER TABLE conversations
+  ADD COLUMN summary             TEXT            NULL COMMENT '最近几段梗概拼成的投影,拼装时跟证据一起挂在用户那句之后' AFTER status,
+  ADD COLUMN summary_upto_msg_id BIGINT UNSIGNED NULL COMMENT '摘要已覆盖到哪条消息,滑窗从其后接原文' AFTER summary;
+
+SET NAMES utf8mb4;
+
+ALTER TABLE conversations
+  ADD COLUMN layer1_from_msg_id BIGINT UNSIGNED NULL
+    COMMENT '层1(原文)起点;此 id 之后原样,之前渲染成半压形态'
+    AFTER summary_upto_msg_id;
+
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  conversation_id BIGINT UNSIGNED NOT NULL,
+  seq             INT             NOT NULL COMMENT '第几段,从 1 开始',
+  from_msg_id     BIGINT UNSIGNED NOT NULL COMMENT '这段覆盖的消息区间,闭区间',
+  upto_msg_id     BIGINT UNSIGNED NOT NULL,
+  content         TEXT            NOT NULL,
+  created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_conv_seq (conversation_id, seq),
+  KEY idx_conv_upto (conversation_id, upto_msg_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分段摘要,一段一行只追加';
+
+SET NAMES utf8mb4;
+
+CREATE TABLE tool_audit_logs (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '审计主键',
+  conversation_id BIGINT UNSIGNED NULL                    COMMENT '所属会话,无会话上下文的调用为 NULL',
+  tool_call_id    VARCHAR(64)     NULL                    COMMENT '模型申请单 id,可对回 messages 流水',
+  tool_name       VARCHAR(128)    NOT NULL                COMMENT '工具名',
+  tool_source     ENUM('builtin','mcp') NOT NULL          COMMENT '工具来源:内置 / MCP 接入',
+  mcp_server      VARCHAR(64)     NULL                    COMMENT '来源 MCP Server 名,内置工具为 NULL',
+  arguments       JSON            NULL                    COMMENT '调用参数',
+  result_summary  TEXT            NULL                    COMMENT '返回结果,过长截断存摘要',
+  status          ENUM('成功','失败','超时','校验拦下','权限拒绝') NOT NULL COMMENT '本次调用结局',
+  error_message   VARCHAR(512)    NULL                    COMMENT '失败 / 拦下时的原因说明',
+  retry_count     TINYINT UNSIGNED NOT NULL DEFAULT 0     COMMENT '实际重试次数,写操作默认不重试恒为 0',
+  duration_ms     INT UNSIGNED    NULL                    COMMENT '耗时毫秒',
+  created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '调用时间',
+  PRIMARY KEY (id),
+  KEY idx_conversation_id (conversation_id),
+  KEY idx_tool_name (tool_name),
+  KEY idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工具调用审计留痕';
+
+SET NAMES utf8mb4;
+
+CREATE TABLE review_queue (
+  id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '缺口主键,也是查重命中要返回的 matched_question_id',
+  normalized_question VARCHAR(512)    NOT NULL                COMMENT '标准化后的 FAQ 式问题',
+  ai_suggested_answer TEXT            NULL                    COMMENT '模型生成的示例答案,备查',
+  occurrence_count    INT UNSIGNED    NOT NULL DEFAULT 1      COMMENT '出现次数,查重命中累加,越高越该优先补',
+  review_status       ENUM('待审','通过','驳回') NOT NULL DEFAULT '待审' COMMENT '人工审核状态',
+  approved_answer     TEXT            NULL                    COMMENT '审核通过时补的核准答案,走 ch03 落库流程写回知识库',
+  created_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '首次入队时间',
+  updated_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  KEY idx_review_status (review_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='飞轮待审队列';
+
+CREATE TABLE eval_runs (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '评估轮次主键',
+  triggered_by ENUM('定时','手动') NOT NULL DEFAULT '定时' COMMENT '这轮怎么起的:定时任务,或某次改动后手动跑',
+  dataset_size INT UNSIGNED    NOT NULL                COMMENT '这轮跑的评估集条数',
+  metrics      JSON            NOT NULL                COMMENT '各指标分数,如 {"recall_at_k":0.82,"mrr":0.71,"faithfulness":0.90}',
+  created_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '跑完落表时间',
+  PRIMARY KEY (id),
+  KEY idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自动化评估流水线轮次结果';
+
+ALTER TABLE low_confidence_questions
+  ADD COLUMN retrieved_chunks  JSON            NULL COMMENT '落池时的召回片段快照:Top 几条的原文与得分,审核页展示用;没走检索为 NULL' AFTER reason,
+  ADD COLUMN matched_review_id BIGINT UNSIGNED NULL COMMENT '查重后归并到的缺口,指向 review_queue.id' AFTER retrieved_chunks,
+  ADD KEY idx_matched_review_id (matched_review_id),
+  ADD CONSTRAINT fk_lcq_review FOREIGN KEY (matched_review_id) REFERENCES review_queue (id) ON DELETE SET NULL;
+
+
+
+附录 B：原章节 41 条验收的最终态对照
+
+这些条目细化正文第十三节的验收，不增加其他系统范围。已被后续章节或用户修改覆盖的旧预期按最终态验证，保留来源编号便于追踪。A 编号不是实施先后顺序；正文与本附录共同构成验收清单。
+
+ch01-A1：curl 调用聊天接口可持续收到 SSE token/delta，不等待完整答案才一次返回。
+
+ch01-A2：连续询问两轮，第二轮能够沿用第一轮的事实和诉求，不能仅返回孤立答案。
+
+ch01-A3：提交真实售后描述，返回包含订单号、诉求类型、期望方案的可解析结构化 JSON；未知字段不编造。
+
+ch02-A1：在浏览器查询一个有权限的真实订单物流，看到正确工具调用徽章和基于真实结果的回复；原例“1001”只在该订单确实存在且归属正确时使用，最终物流调用走 MCP。
+
+ch02-A2：问“退货政策是什么”，query_faq 的最终检索实现能取得真实政策并据此回答，引用可点击；另核验知识 Workflow 强制检索路径。不能用邮费用例替代本条。
+
+ch02-A3：保存“邮费是多少”在同一真实语料上的 LIKE 基线和最终语义检索对照。记录实际漏召回；若 LIKE 已命中则如实记录，不人为改坏真实语料。这是历史基线验收，不要求最终系统故意漏召回。
+
+ch03-A1：“邮费是多少”等改换说法的问题在最终语义检索链路可召回运费说明，答案与真实政策一致。
+
+ch03-A2：中断知识建库后重新运行，pending 块被补齐，已有向量不重复，MySQL 与 Milvus 状态可核对。
+
+ch04-A1：实际运行纯向量、纯 BM25、混合、混合加 Rerank 四种策略，输出 Recall@K、MRR、Faithfulness 数值及 query 分桶报告，不填示例数字。
+
+ch04-A2：问真实知识库中包含的具体商品型号，检索轨迹能确认 BM25 通道命中对应内容。
+
+ch04-A3：点击答案引用编号，展示与该轮编号一致的来源 chunk 原文和章节路径，并能定位来源文献；不能跳到另一版本的无关内容。
+
+ch04-A4：问知识库中确无证据的问题，明确拒答或兜底，问题以正确入口和原因落入低置信度池。
+
+ch05-A1：问政策类问题，在本轮日志/trace 中确认强制知识检索节点确实执行，不能只验证“有一条 trace”。
+
+ch05-A2：查询真实订单物流，由 Agent 选择相应工具并依据返回结果回答，不用固定话术伪造业务查询。
+
+ch05-A3：说“我要投诉”，显示独立“转人工”“建工单”按钮。分别测试真实人工接入、点击建工单后写入、两个都不点击继续对话三条路径；未点击时无副作用，未真实接通时不显示接通成功。客服品牌统一 SayHelp。
+
+ch05-A4：明确闲聊问题在 jev 判为闲聊后返回固定 SayHelp 话术，不调用主力生成模型；不把分类调用错误统计为零。
+
+ch05-A5：对确需先查订单再查物流的真实问题，轨迹显示多于一步的受控工具循环，最终答案正确且可收敛。
+
+ch06-A1：使用多轮标注用例验证物流 → 退款 → 物流的切换，逐轮检查 jev 意图及指代消解，不只检查最终一轮。
+
+ch06-A2：意图输出稳定可解析，严格为 intent、confidence 两字段，枚举合法，拿不准的怪问题归“其他”，不是强行归业务意图。
+
+ch06-A3：在已存在可识别订单上下文时问“这个能退吗”，依次看到指代补全、订单数据取得、政策检索、置信度检查和有依据的判断；指代确实不清时澄清而不猜。
+
+ch06-A4：浏览器未提供订单号时询问退款，聊天流展示有权限的真实订单卡片；点选后自动回填并恢复子流程。退款原因在表单固定类目下拉选择，不用重复追问代替该控件。
+
+ch07-A1：连续对话二十轮以上不超出模型窗口、不崩溃，完整历史可回载。
+
+ch07-A2：用正文五.14 的演示配置观察最近层降级 → 中间层超预算 → 异步摘要新增段的完整过程，日志有边界和 token 用量；再问“最开始那个订单后来怎么说”，能利用摘要中的真实订单号与诉求回答。原预算参考值及计算差异单独记录并按要求审核，不能只检查出现过摘要日志。
+
+ch07-A3：约定默认模型、默认配置下运行二十轮用例，不触发不必要的降级或摘要；若预算确实无法满足则先举证审核配置，不偷换到另一个配置冒充默认验收。
+
+ch07-A4：日志显示摘要触发/完成等状态及耗时，且摘要未阻塞当前回复；检查每轮模型调用前的 model_ctx/history_ctx，可看到实际发送的摘要与滑窗，闲聊轮 history_ctx 也存在。
+
+ch07-A5：侧栏创建多个会话、切回任一旧会话，完整原文回载并能继续聊；“新聊天”不覆盖旧会话，侧栏失败不阻断当前聊天，滚动及下方中央“返回最新”可用。
+
+ch08-A1：给客服侧登记一个真实可执行的新工具，只增加工具实现和注册、不修改 Agent 核心，运行中的服务可取得并调用新工具。
+
+ch08-A2：物流和售后两个 MCP Server 分别作为独立进程运行；物流轨迹通过物流 Server 查询，在保/退货进度通过售后 Server 查询，使用真实数据。不要把原文“两个 Server”误读成两者都必须提供物流工具。
+
+ch08-A3：在一个 MCP Server 新增工具，仅重启该 Server，客服服务保持运行且不改代码；重新发现后 Agent 能调用新工具。此用例与客服侧本地注册测试分别执行。
+
+ch08-A4：用户明确要求建工单但描述不全时先追问；补齐后展示类型及问题描述预览，确认后 tickets 仅新增一条，回复真实工单号。
+
+ch08-A5：相同预览流程点击取消，tickets 无新增，tool_audit_logs 对应调用状态为“权限拒绝”，原因为用户取消。
+
+ch08-A6：在隔离测试条件下制造只读工具暂时性超时，验证重试、错误兜底和审计重试次数/最终状态/耗时；制造写工具超时，确认无自动重试且 retry_count=0。无用户确认时直接请求执行写工具也必须被执行引擎拒绝，不能仅靠前端按钮限制。
+
+ch09-A1：在自部署 Langfuse 中打开一条请求，完整查看节点 prompt、模型输出、检索结果、工具调用、tokens、耗时与错误，不能只展示根 span。
+
+ch09-A2：问真实知识库没有的问题，收到兜底，问题经过归集出现在待审队列；详情显示用户原话与当轮召回片段/得分，区分未检索和采集失败。
+
+ch09-A3：审核页填核准答案并通过，经 MySQL/Milvus 同步成功后再问同一问题，能引用新知识正确回答；审核通过但索引尚未完成时不能冒称闭环成功。
+
+ch09-A4：聊天页对回答点击 👎，该回答对应的用户原问及原轮次快照进入问题池，标准化/模型查重后出现在或合并到待审队列，重复点击不重复计数。
+
+ch09-A5：可展示按意图汇总的 token 花销与调用情况，统计包含本轮实际发生的模型调用，不漏掉 jev；没有确认费率时不编造金额。
+
+ch09-A6：评估流水线至少实际运行两轮，eval_runs 一轮一条，展示同版本可比评估集下的指标趋势和退化情况。
+
+ch10-A1：独立测试集输出 17 类各自的精确率、召回率、F1 与二元混淆矩阵，并有人工错判复核记录。
+
+ch10-A2：用一批真实低置信度问题触发旁路分类，topic_classifications 中有对应结果，后台主题分布图正确展示；实时对话链路不调用分类器。
+
+ch10-A3：“买大了想退”等确有多个诉求的样例同时命中尺码和退换货，标签不多不少；报告对应输出，不只声称支持多标签。
+
+
