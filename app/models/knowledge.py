@@ -7,7 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, BigIntPK
 
 
 class VectorizeStatus(str, enum.Enum):
@@ -18,7 +18,7 @@ class VectorizeStatus(str, enum.Enum):
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     category: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     questions: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
@@ -53,7 +53,7 @@ class QaExtractionStatus(str, enum.Enum):
 class QaExtractionStaging(Base):
     __tablename__ = "qa_extraction_staging"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     batch_no: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
@@ -69,7 +69,7 @@ class ConversationSummary(Base):
     __tablename__ = "conversation_summaries"
     __table_args__ = (UniqueConstraint("conversation_id", "seq", name="uk_conv_seq"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     from_msg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

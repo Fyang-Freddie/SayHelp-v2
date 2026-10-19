@@ -1,16 +1,16 @@
 from decimal import Decimal
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, DECIMAL, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, DECIMAL, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, BigIntPK
 
 
 class Order(Base):
     __tablename__ = "orders"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     customer_id: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
     order_no: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     item_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
@@ -27,7 +27,7 @@ class Order(Base):
 class Product(Base):
     __tablename__ = "products"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     product_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     model: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     order_spec: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -39,7 +39,7 @@ class Product(Base):
 class Logistics(Base):
     __tablename__ = "logistics"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     order_no: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     item_ids: Mapped[str] = mapped_column(String(128), nullable=False)
     waybill_no: Mapped[str] = mapped_column(String(32), index=True, nullable=False)

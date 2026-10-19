@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import BigInteger, DateTime, DECIMAL, Enum, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, BigIntPK
 
 
 class MessageRole(str, enum.Enum):
@@ -18,7 +18,7 @@ class MessageRole(str, enum.Enum):
 class Conversation(Base):
     __tablename__ = "conversations"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -33,7 +33,7 @@ class Conversation(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     role: Mapped[MessageRole] = mapped_column(Enum(MessageRole, name="message_role"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -47,7 +47,7 @@ class Message(Base):
 class RetrievalSnapshot(Base):
     __tablename__ = "retrieval_snapshots"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     user_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     answer_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

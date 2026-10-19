@@ -6,7 +6,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, BigIntPK
 
 
 def _values(e: type[enum.Enum]) -> list[str]:
@@ -64,7 +64,7 @@ class Ticket(Base):
 class ToolAuditLog(Base):
     __tablename__ = "tool_audit_logs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     tool_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tool_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
@@ -86,7 +86,7 @@ class ToolAuditLog(Base):
 class ReviewQueueItem(Base):
     __tablename__ = "review_queue"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     normalized_question: Mapped[str] = mapped_column(String(512), nullable=False)
     ai_suggested_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -104,7 +104,7 @@ class ReviewQueueItem(Base):
 class LowConfidenceQuestion(Base):
     __tablename__ = "low_confidence_questions"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("conversations.id"), nullable=True
     )
@@ -124,7 +124,7 @@ class LowConfidenceQuestion(Base):
 class FaithCase(Base):
     __tablename__ = "faith_cases"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     eval_id: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     bucket: Mapped[str] = mapped_column(String(24), nullable=False)
     query: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -149,7 +149,7 @@ class FaithCase(Base):
 class EvalRun(Base):
     __tablename__ = "eval_runs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     triggered_by: Mapped[EvalTrigger] = mapped_column(
         Enum(EvalTrigger, name="eval_trigger", values_callable=_values),
         default=EvalTrigger.scheduled, nullable=False,
@@ -165,7 +165,7 @@ class EvalRun(Base):
 class TopicClassification(Base):
     __tablename__ = "topic_classifications"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     low_confidence_question_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     labels: Mapped[list] = mapped_column(JSON, nullable=False)
     classified_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
