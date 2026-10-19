@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # 意图置信度阈值，待标注集校准
     intent_confidence_threshold: float = 0.5
 
+    # 受控 ReAct Agent（Task 5）：最大步数 / token 预算（字符数代理）/ 超时（秒）
+    agent_max_steps: int = 6
+    agent_token_budget: int = 8000
+    agent_timeout_s: float = 60
+
     langfuse_host: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
