@@ -1,0 +1,6 @@
+sqlalchemy>=2.0.30,<2.1
+pymysql>=1.1.1
+pydantic>=2.7
+pydantic-settings>=2.3
+alembic>=1.13
+bcrypt>=4.1
