@@ -236,8 +236,12 @@ function handleStreamEvent(bubble, type, data) {
     bubble.textContent = "正在处理…";
     bubble.classList.add("pending");
   } else if (type === "text") {
-    bubble.classList.remove("pending");
     const delta = data && data.delta != null ? data.delta : "";
+    if (bubble.classList.contains("pending")) {
+      // 首个 delta 到达前清空「正在处理…」占位，确保最终正文为后端原文
+      bubble.classList.remove("pending");
+      bubble.textContent = "";
+    }
     bubble.textContent += delta; // 逐 delta 增量渲染（后端按块下发，P1 为整段占位）
   }
   messagesEl().scrollTop = messagesEl().scrollHeight;
