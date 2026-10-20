@@ -27,6 +27,7 @@ class MessageOut(BaseModel):
     citations: dict | None
     feedback: dict | None
     created_at: datetime
+    sender_name: str | None
 
 class ConversationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

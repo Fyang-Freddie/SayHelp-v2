@@ -44,6 +44,8 @@ class Message(Base):
     citations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     feedback: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    sender_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sender_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class RetrievalSnapshot(Base):

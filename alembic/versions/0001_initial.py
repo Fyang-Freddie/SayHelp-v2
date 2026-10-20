@@ -118,6 +118,8 @@ _TABLES_UP = [
 	citations JSON, 
 	feedback JSON, 
 	created_at DATETIME NOT NULL DEFAULT now(), 
+	sender_id BIGINT, 
+	sender_name VARCHAR(64), 
 	PRIMARY KEY (id)
 )"""),
     ('orders',
