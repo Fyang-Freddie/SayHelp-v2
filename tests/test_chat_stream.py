@@ -49,9 +49,10 @@ def parse_sse(lines):
 @pytest.fixture
 def fake_workflow():
     """覆盖 get_workflow：闲聊确定性 fake（不调用主力模型 / 检索）。"""
-    from app.api.chat import get_workflow
+    from app.api.chat import get_workflow, get_tool_registry
     from app.llm.fakes import FakeChatModel, FakeIntentModel
     from app.main import app
+    from app.tools.registry import ToolRegistry
     from app.workflow.graph import build_workflow
 
     class _DummyRag:
@@ -64,13 +65,18 @@ def fake_workflow():
 
     def override():
         return build_workflow(chat_model=chat, intent_model=intent,
-                              retriever=_DummyRag(), tools=[])
+                              retriever=_DummyRag())
+
+    def override_registry():
+        return ToolRegistry()   # 空注册中心：测试不触 MCP 网络
 
     app.dependency_overrides[get_workflow] = override
+    app.dependency_overrides[get_tool_registry] = override_registry
     try:
         yield {"chat": chat, "intent": intent}
     finally:
         app.dependency_overrides.pop(get_workflow, None)
+        app.dependency_overrides.pop(get_tool_registry, None)
 
 
 def test_stream_emits_status_text_done_and_persists(client, user_a, conv_a, db_session, fake_workflow):
@@ -150,14 +156,16 @@ def test_sending_message_bubbles_conversation_to_top(client, user_a, conv_a, db_
 
 def test_stream_emits_error_and_done_and_persists_on_invoke_failure(client, user_a, conv_a, db_session):
     """invoke 抛异常：须发 error + done，且落库诚实降级 assistant，绝不裸断流。"""
-    from app.api.chat import get_workflow
+    from app.api.chat import get_workflow, get_tool_registry
     from app.main import app
+    from app.tools.registry import ToolRegistry
 
     class _BoomWorkflow:
         def invoke(self, state):
             raise RuntimeError("boom")
 
     app.dependency_overrides[get_workflow] = lambda: _BoomWorkflow()
+    app.dependency_overrides[get_tool_registry] = lambda: ToolRegistry()
     headers = _auth(client, "user_a")
     try:
         with client.stream(
@@ -169,6 +177,7 @@ def test_stream_emits_error_and_done_and_persists_on_invoke_failure(client, user
             events = parse_sse(r.iter_lines())
     finally:
         app.dependency_overrides.pop(get_workflow, None)
+        app.dependency_overrides.pop(get_tool_registry, None)
 
     assert [e.type for e in events] == ["status", "error", "done"]
     assert "服务暂时不可用" in events[1].data["message"]

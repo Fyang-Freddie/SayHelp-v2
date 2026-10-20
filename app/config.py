@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     milvus_minio_user: str = ""
     milvus_minio_password: str = ""
 
+    # 两个 MCP Server（物流/售后）的 Streamable HTTP 地址；空表示未部署，
+    # 客服服务 MCP 客户端将诚实降级为「无该 Server 工具」（不伪造物流/售后结果）。
+    mcp_logistics_url: str = ""
+    mcp_aftersales_url: str = ""
+
     embedding_model: str = "BAAI/bge-m3"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     embedding_use_fp16: bool = False

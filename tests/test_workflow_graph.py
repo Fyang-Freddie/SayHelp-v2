@@ -1,7 +1,13 @@
 # tests/test_workflow_graph.py
 from app.llm.fakes import FakeChatModel, FakeIntentModel
 from app.llm.client import IntentResult
+from app.tools.context import ExecutionContext
 from app.workflow.graph import build_workflow
+
+
+def _ctx():
+    return ExecutionContext(caller_user_id=1, caller_role="customer",
+                            customer_id="C0001", conversation_id=1)
 
 
 class _Rag:
@@ -17,8 +23,9 @@ class _Rag:
 def test_graph_chitchat_returns_fixed_text_without_model():
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="闲聊", confidence=0.9)
     chat = FakeChatModel(); chat.next_text = "不该被调用"
-    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag(), tools=[])
-    out = graph.invoke({"messages": [{"role": "user", "content": "你好"}]})
+    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag())
+    out = graph.invoke({"messages": [{"role": "user", "content": "你好"}],
+                        "ctx": _ctx(), "agent_tools": []})
     assert "SayHelp" in out["answer"]
     assert chat.called is False  # 闲聊不调用主力模型
 
@@ -26,21 +33,24 @@ def test_graph_chitchat_returns_fixed_text_without_model():
 def test_graph_product_qa_end_to_end():
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="商品咨询", confidence=0.9)
     chat = FakeChatModel(); chat.next_text = "该商品保修 12 个月"
-    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag(), tools=[])
-    out = graph.invoke({"messages": [{"role": "user", "content": "手机保修多久"}]})
+    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag())
+    out = graph.invoke({"messages": [{"role": "user", "content": "手机保修多久"}],
+                        "ctx": _ctx(), "agent_tools": []})
     assert out["answer"] == "该商品保修 12 个月"
     assert [c.index for c in out["citations"]] == [1]
 
 
-def test_graph_complaint_returns_honest_disclosure():
+def test_graph_complaint_emits_handoff_card():
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="投诉", confidence=0.9)
     chat = FakeChatModel(); chat.next_text = "不该被调用"
-    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag(), tools=[])
-    out = graph.invoke({"messages": [{"role": "user", "content": "我要投诉你们"}]})
+    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag())
+    out = graph.invoke({"messages": [{"role": "user", "content": "我要投诉你们"}],
+                        "ctx": _ctx(), "agent_tools": []})
     ans = out["answer"]
-    assert ("后续" in ans) or ("暂" in ans)  # 诚实披露，不冒报已受理
+    assert out.get("card", {}).get("type") == "transfer_human"
+    assert "转人工" in ans or "转接" in ans       # 诚实指向真人，不冒报已受理
     assert "已记录" not in ans
-    assert "核实并处理" not in ans
+    assert "已受理" not in ans
 
 
 class _RecordingChat:
@@ -79,8 +89,9 @@ def test_graph_product_qa_injects_numbered_evidence():
     """agent 拿到的证据须按 [n] 1-based 编号，与 build_citations 对齐。"""
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="商品咨询", confidence=0.9)
     chat = _RecordingChat()
-    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag2(), tools=[])
-    out = graph.invoke({"messages": [{"role": "user", "content": "手机保修多久"}]})
+    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag2())
+    out = graph.invoke({"messages": [{"role": "user", "content": "手机保修多久"}],
+                        "ctx": _ctx(), "agent_tools": []})
     assert out["answer"] == "根据资料回答"
 
     evidence = "\n".join(m["content"] for m in chat.messages if m["role"] == "system")
@@ -88,12 +99,14 @@ def test_graph_product_qa_injects_numbered_evidence():
     assert "[2] 电池 5000mAh" in evidence
 
 
-def test_graph_logistics_returns_honest_stub():
+def test_graph_logistics_runs_agent():
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="物流", confidence=0.9)
-    chat = FakeChatModel(); chat.next_text = "不该被调用"
-    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag(), tools=[])
-    out = graph.invoke({"messages": [{"role": "user", "content": "我的快递到哪了"}]})
-    assert "后续" in out["answer"] or "暂" in out["answer"]  # 诚实降级，不伪造物流结果
+    chat = FakeChatModel()
+    chat.next_actions = [("final", "物流信息如下")]
+    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag())
+    out = graph.invoke({"messages": [{"role": "user", "content": "我的快递到哪了"}],
+                        "ctx": _ctx(), "agent_tools": []})
+    assert out["answer"] == "物流信息如下"        # 物流分支走 agent 而非占位话术
 
 
 def test_graph_product_qa_refuses_when_gate_fails():
@@ -105,7 +118,8 @@ def test_graph_product_qa_refuses_when_gate_fails():
 
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="商品咨询", confidence=0.9)
     chat = FakeChatModel(); chat.next_text = "不该被调用"
-    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_RagFail(), tools=[])
-    out = graph.invoke({"messages": [{"role": "user", "content": "手机保修多久"}]})
+    graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_RagFail())
+    out = graph.invoke({"messages": [{"role": "user", "content": "手机保修多久"}],
+                        "ctx": _ctx(), "agent_tools": []})
     assert "暂" in out["answer"] or "无法" in out["answer"]  # 闸不过诚实拒答
     assert out["citations"] == []  # 未过闸不得编造引用

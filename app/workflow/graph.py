@@ -1,15 +1,18 @@
-"""P3 聊天工作流组装（GRAPH 节点）。
+"""P4 聊天工作流组装（GRAPH 节点）。
 
 把 Task 2–5 与 P2 检索编排组装成一条 LangGraph 图：
 
     START → resolve → classify → 条件边按 Branch 分流
       ├─ 商品咨询 → product_qa（RAG → 闸 → agent）
-      ├─ 闲聊/投诉/其他 → fixed_text（固定话术）
-      └─ 退款退货/售后/物流订单 → honest_stub（诚实占位，绝不伪造结果）
+      ├─ 闲聊/其他 → fixed_text（固定话术）
+      ├─ 投诉 → complaint（transfer_human 转人工卡片）
+      ├─ 退款退货/售后 → refund_aftersales（order_select 订单选择卡片）
+      └─ 物流订单 → logistics_order（agent 带工具：query_order/query_logistics 等）
     → final → END
 
 闸逻辑已内建在 ``Retriever.retrieve()`` 的 ``passed`` 字段里，本图只读该字段，
-不重复实现闸。
+不重复实现闸。身份（``ctx``）与工具（``agent_tools``）由 chat.py 经 state 注入，
+绝不进入模型可见的工具 Schema / 消息。
 """
 from __future__ import annotations
 
@@ -23,6 +26,8 @@ from app.config import settings
 from app.llm.client import IntentResult
 from app.rag.citations import Citation, build_citations
 from app.rag.retrieval import RetrievalResult
+from app.tools.context import ExecutionContext
+from app.tools.interrupt import build_card, sign_interrupt
 from app.workflow.agent import run_agent
 from app.workflow.intent import classify_intent
 from app.workflow.resolve import resolve_reference
@@ -40,23 +45,18 @@ class WorkflowState(TypedDict):
     passed: bool
     answer: str
     citations: list[Citation]
+    ctx: ExecutionContext          # 输入态：由 chat.py 注入
+    agent_tools: list              # 输入态：由 chat.py 注入
+    card: dict | None              # 输出态：投诉/退款分支卡片
 
 
 # 闸不过时的诚实拒答文本（含「暂」/「无法」）。
 REFUSE_TEXT = "抱歉，暂无法确认该信息，请稍后重试或转人工。"
 
-# 固定话术：闲聊 / 投诉 / 其他。闲聊话术必须含「SayHelp」。
+# 固定话术：闲聊 / 其他。投诉改走 _complaint 节点（转人工卡片）。
 FIXED_TEXTS = {
     Branch.闲聊: "您好，我是 SayHelp 客服助手，很高兴为您服务。请问有什么可以帮您？",
-    Branch.投诉: "很抱歉给您带来不便。转人工 / 建工单功能将在后续阶段提供，当前暂无法受理投诉工单，敬请谅解。",
     Branch.其他: "抱歉，我还不能完全理解您的问题，请您换个方式描述一下，或转人工协助。",
-}
-
-# 诚实占位：退款退货 / 售后 / 物流订单。绝不伪造订单、物流、退款结果。
-HONEST_STUBS = {
-    Branch.退款退货: "退款退货处理能力将在后续阶段接入，暂无法为您办理，请稍后再试。",
-    Branch.售后: "售后服务能力将在后续阶段接入，暂无法为您处理，请稍后再试。",
-    Branch.物流订单: "物流查询能力将在后续阶段接入，暂无法查询，请稍后再试。",
 }
 
 
@@ -69,7 +69,7 @@ def _msg_to_dict(m) -> dict:
     return {"role": role_map.get(role, "user"), "content": getattr(m, "content", "") or ""}
 
 
-def build_workflow(*, chat_model, intent_model, retriever, tools, settings=settings) -> CompiledStateGraph:
+def build_workflow(*, chat_model, intent_model, retriever, settings=settings) -> CompiledStateGraph:
     """组装聊天工作流，返回可 ``.invoke()`` 的编译图。"""
 
     def _resolve(state: WorkflowState) -> dict:
@@ -101,7 +101,7 @@ def build_workflow(*, chat_model, intent_model, retriever, tools, settings=setti
         ]
         agent_res = run_agent(
             chat_model,
-            tools,
+            state["agent_tools"],
             context,
             max_steps=settings.agent_max_steps,
             token_budget=settings.agent_token_budget,
@@ -109,13 +109,30 @@ def build_workflow(*, chat_model, intent_model, retriever, tools, settings=setti
         )
         return {"answer": agent_res.answer, "citations": cites, "evidence": r, "passed": True}
 
-    def _fixed_text(state: WorkflowState) -> dict:
-        text = FIXED_TEXTS.get(state["branch"], FIXED_TEXTS[Branch.其他])
-        return {"answer": text, "citations": []}
+    def _logistics_order(state: WorkflowState) -> dict:
+        context = [{"role": "user", "content": state["resolved_text"]}]
+        agent_res = run_agent(
+            chat_model,
+            state["agent_tools"],
+            context,
+            max_steps=settings.agent_max_steps,
+            token_budget=settings.agent_token_budget,
+            timeout_s=settings.agent_timeout_s,
+        )
+        return {"answer": agent_res.answer, "citations": []}
 
-    def _honest_stub(state: WorkflowState) -> dict:
-        text = HONEST_STUBS.get(state["branch"], HONEST_STUBS[Branch.退款退货])
-        return {"answer": text, "citations": []}
+    def _refund_aftersales(state: WorkflowState) -> dict:
+        token, _ = sign_interrupt(state["ctx"].conversation_id, "order_select")
+        return {"answer": "请选择需要办理的订单（退款仅作表单预览，不会真实提交）。",
+                "citations": [], "card": build_card("order_select", token, {})}
+
+    def _complaint(state: WorkflowState) -> dict:
+        token, _ = sign_interrupt(state["ctx"].conversation_id, "transfer_human")
+        return {"answer": "很抱歉给您带来不便。您可以转接人工客服，坐席会尽快为您跟进。",
+                "citations": [], "card": build_card("transfer_human", token, {})}
+
+    def _fixed_text(state: WorkflowState) -> dict:
+        return {"answer": FIXED_TEXTS.get(state["branch"], FIXED_TEXTS[Branch.其他]), "citations": []}
 
     def _final(state: WorkflowState) -> dict:
         return {}
@@ -125,7 +142,9 @@ def build_workflow(*, chat_model, intent_model, retriever, tools, settings=setti
     graph.add_node("classify", _classify)
     graph.add_node("product_qa", _product_qa)
     graph.add_node("fixed_text", _fixed_text)
-    graph.add_node("honest_stub", _honest_stub)
+    graph.add_node("complaint", _complaint)
+    graph.add_node("refund_aftersales", _refund_aftersales)
+    graph.add_node("logistics_order", _logistics_order)
     graph.add_node("final", _final)
 
     graph.add_edge(START, "resolve")
@@ -136,16 +155,15 @@ def build_workflow(*, chat_model, intent_model, retriever, tools, settings=setti
         {
             Branch.商品咨询: "product_qa",
             Branch.闲聊: "fixed_text",
-            Branch.投诉: "fixed_text",
             Branch.其他: "fixed_text",
-            Branch.退款退货: "honest_stub",
-            Branch.售后: "honest_stub",
-            Branch.物流订单: "honest_stub",
+            Branch.投诉: "complaint",
+            Branch.退款退货: "refund_aftersales",
+            Branch.售后: "refund_aftersales",
+            Branch.物流订单: "logistics_order",
         },
     )
-    graph.add_edge("product_qa", "final")
-    graph.add_edge("fixed_text", "final")
-    graph.add_edge("honest_stub", "final")
+    for node in ("product_qa", "fixed_text", "complaint", "refund_aftersales", "logistics_order"):
+        graph.add_edge(node, "final")
     graph.add_edge("final", END)
 
     return graph.compile()

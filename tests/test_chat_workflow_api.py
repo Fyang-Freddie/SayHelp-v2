@@ -66,10 +66,12 @@ def fake_workflow():
 
     返回 {"chat", "intent", "rag"}；测试可改 intent.next_result / chat.next_text，
     或把 rag 换成自定义 retriever（实现 retrieve(query, top_k) 即可）。
+    同时覆盖 get_tool_registry 返回空注册中心，避免 chat_stream 构建真实 MCP 注册中心。
     """
-    from app.api.chat import get_workflow
+    from app.api.chat import get_workflow, get_tool_registry
     from app.llm.fakes import FakeChatModel, FakeIntentModel
     from app.main import app
+    from app.tools.registry import ToolRegistry
     from app.workflow.graph import build_workflow
 
     chat = FakeChatModel()
@@ -79,13 +81,18 @@ def fake_workflow():
 
     def override():
         return build_workflow(chat_model=ctx["chat"], intent_model=ctx["intent"],
-                              retriever=ctx["rag"], tools=[])
+                              retriever=ctx["rag"])
+
+    def override_registry():
+        return ToolRegistry()   # 空注册中心：测试不触 MCP 网络
 
     app.dependency_overrides[get_workflow] = override
+    app.dependency_overrides[get_tool_registry] = override_registry
     try:
         yield ctx
     finally:
         app.dependency_overrides.pop(get_workflow, None)
+        app.dependency_overrides.pop(get_tool_registry, None)
 
 
 def test_chat_stream_chitchat_returns_fixed_text(client, user_a, conv_a, fake_workflow):
@@ -155,8 +162,9 @@ def test_chat_stream_product_qa_gate_fail_refuses(client, user_a, conv_a, db_ses
 
 def test_chat_stream_passes_prior_history_to_workflow(client, user_a, conv_a, db_session):
     """多轮历史接入：第二次 invoke 应收到首轮 user 内容，且当前 user 消息在末尾。"""
-    from app.api.chat import get_workflow
+    from app.api.chat import get_workflow, get_tool_registry
     from app.main import app
+    from app.tools.registry import ToolRegistry
 
     calls = []
 
@@ -166,6 +174,7 @@ def test_chat_stream_passes_prior_history_to_workflow(client, user_a, conv_a, db
             return {"answer": "已作答", "citations": []}
 
     app.dependency_overrides[get_workflow] = lambda: _SpyWorkflow()
+    app.dependency_overrides[get_tool_registry] = lambda: ToolRegistry()
     headers = _auth(client, "user_a")
     try:
         for content in ("手机保修多久", "那电池呢"):
@@ -178,6 +187,7 @@ def test_chat_stream_passes_prior_history_to_workflow(client, user_a, conv_a, db
                 list(r.iter_lines())
     finally:
         app.dependency_overrides.pop(get_workflow, None)
+        app.dependency_overrides.pop(get_tool_registry, None)
 
     assert len(calls) == 2
     second = calls[1]["messages"]
@@ -218,9 +228,9 @@ def test_build_real_workflow_retriever_is_fully_lazy():
 
 
 
-def test_chat_stream_logistics_returns_honest_stub(client, user_a, conv_a, fake_workflow):
+def test_chat_stream_logistics_runs_agent(client, user_a, conv_a, fake_workflow):
     fake_workflow["intent"].next_result = IntentResult(intent="物流", confidence=0.9)
-    fake_workflow["chat"].next_text = "不该被调用"
+    fake_workflow["chat"].next_actions = [("final", "物流信息如下")]
     headers = _auth(client, "user_a")
     with client.stream(
         "POST", "/api/chat/stream",
@@ -230,5 +240,4 @@ def test_chat_stream_logistics_returns_honest_stub(client, user_a, conv_a, fake_
         assert r.status_code == 200
         events = parse_sse(r.iter_lines())
     assert [e.type for e in events] == ["status", "text", "done"]
-    text = events[1].data["delta"]
-    assert "后续" in text or "暂" in text  # 诚实占位，不伪造物流结果
+    assert events[1].data == {"delta": "物流信息如下"}
