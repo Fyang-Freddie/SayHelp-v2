@@ -40,14 +40,15 @@ def test_graph_product_qa_end_to_end():
     assert [c.index for c in out["citations"]] == [1]
 
 
-def test_graph_complaint_emits_handoff_card():
+def test_graph_complaint_emits_handoff_and_ticket_cards():
     intent = FakeIntentModel(); intent.next_result = IntentResult(intent="投诉", confidence=0.9)
     chat = FakeChatModel(); chat.next_text = "不该被调用"
     graph = build_workflow(chat_model=chat, intent_model=intent, retriever=_Rag())
     out = graph.invoke({"messages": [{"role": "user", "content": "我要投诉你们"}],
                         "ctx": _ctx(), "agent_tools": []})
     ans = out["answer"]
-    assert out.get("card", {}).get("type") == "transfer_human"
+    types = {c["type"] for c in out.get("cards", [])}
+    assert types == {"transfer_human", "ticket_confirm"}   # 独立「转人工」「建工单」按钮
     assert "转人工" in ans or "转接" in ans       # 诚实指向真人，不冒报已受理
     assert "已记录" not in ans
     assert "已受理" not in ans

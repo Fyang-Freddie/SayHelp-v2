@@ -167,19 +167,19 @@ def chat_stream(req: ChatStreamRequest, db: Session = Depends(get_db),
                                      "ctx": ctx, "agent_tools": agent_tools})
             answer = state["answer"]
             citations = state.get("citations", [])
-            card = state.get("card")
+            cards = state.get("cards") or []
         except Exception:
             # 工作流异常（如模型/检索器故障）→ 发 error + done，绝不裸断流。
             answer = SERVICE_UNAVAILABLE_TEXT
             citations = []
-            card = None
+            cards = []
             yield sse_event("error", {"message": "服务暂时不可用，请稍后重试"})
         else:
             yield sse_event("text", {"delta": answer})
             if citations:
                 yield sse_event("reference", _serialize_citations(citations))
-            if card:
-                yield sse_event("card", card)
+            for c in cards:
+                yield sse_event("card", c)
         yield sse_event("done", {})
 
         # 回答（或诚实降级）连同 citations 在流结束后落库为 assistant 消息，

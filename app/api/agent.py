@@ -12,9 +12,9 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
 @router.get("/conversations", response_model=list[ConversationOut])
-def list_waiting(status_filter: str = "agent_waiting", db: Session = Depends(get_db),
+def list_waiting(status: str = "agent_waiting", db: Session = Depends(get_db),
                  user: User = Depends(require_role("agent", "admin"))):
-    rows = (db.query(Conversation).filter(Conversation.status == status_filter)
+    rows = (db.query(Conversation).filter(Conversation.status == status)
             .order_by(Conversation.updated_at.desc()).all())
     return [ConversationOut.model_validate(r) for r in rows]
 
@@ -38,7 +38,7 @@ def agent_reply(conv_id: int, body: dict, db: Session = Depends(get_db),
     if conv is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
     msg = Message(conversation_id=conv.id, role="assistant", content=body.get("content", ""),
-                  sender_id=user.id, sender_name=user.display_name)
+                  sender_id=user.id, sender_name=user.display_name or user.username or "坐席")
     db.add(msg)
     conv.updated_at = datetime.now(timezone.utc)
     db.commit(); db.refresh(msg)

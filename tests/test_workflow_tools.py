@@ -45,15 +45,16 @@ def test_refund_emits_order_select_card():
     graph = _graph("退款退货")
     out = graph.invoke({"messages": [{"role": "user", "content": "我要退货"}],
                         "ctx": _ctx(), "agent_tools": []})
-    assert out.get("card", {}).get("type") == "order_select"
-    assert out["card"]["interrupt_id"]
+    assert out["cards"][0]["type"] == "order_select"
+    assert out["cards"][0]["interrupt_id"]
 
 
-def test_complaint_emits_handoff_card():
+def test_complaint_emits_handoff_and_ticket_cards():
     graph = _graph("投诉")
     out = graph.invoke({"messages": [{"role": "user", "content": "我要投诉"}],
                         "ctx": _ctx(), "agent_tools": []})
-    assert out["card"]["type"] == "transfer_human"
-    assert out["card"]["interrupt_id"]
+    types = {c["type"] for c in out["cards"]}
+    assert types == {"transfer_human", "ticket_confirm"}
+    assert all(c["interrupt_id"] for c in out["cards"])
     assert "已记录" not in out["answer"]
     assert "已受理" not in out["answer"]

@@ -44,3 +44,16 @@ def test_refresh_rediscovers():
                      "inputSchema": {"type": "object"}, "server": "aftersales"})
     client.refresh()
     assert {t.name for t in client.list_tools()} == {"query_logistics", "query_warranty"}
+
+
+def test_discover_skips_unmapped_customer_tool():
+    """未映射 ownership_field 的 requires_customer 工具 fail-closed 不暴露（Review Focus #1）。"""
+    tp = _FakeTransport(tools=[
+        {"name": "query_logistics", "description": "查物流",
+         "inputSchema": {"type": "object"}, "server": "logistics"},
+        {"name": "mystery_tool", "description": "未映射的售后工具",
+         "inputSchema": {"type": "object"}, "server": "aftersales"},
+    ])
+    client = McpClient(tp)
+    names = {t.name for t in client.list_tools()}
+    assert names == {"query_logistics"}

@@ -35,12 +35,18 @@ class McpClient:
         for raw in self._transport.list_tools():
             server = raw.get("server") or raw["name"]
             name = raw["name"]
+            ownership = _OWNERSHIP_FIELD.get((server, name))
+            # 白名单（§4.5）：requires_customer 的 MCP 工具若未映射 ownership_field，
+            # 引擎侧无法做归属预检 → fail-closed 不暴露（绝不把越权查询风险放开）。
+            if ownership is None:
+                logger.warning("MCP 工具 %s:%s 未映射归属字段，已跳过（fail-closed）", server, name)
+                continue
             specs.append(ToolSpec(
                 name=name, description=raw["description"],
                 input_schema=raw.get("inputSchema") or {"type": "object"},
                 source="mcp", mcp_server=server,
                 requires_customer=True,
-                ownership_field=_OWNERSHIP_FIELD.get((server, name)),
+                ownership_field=ownership,
             ))
         return specs
 

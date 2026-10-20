@@ -32,6 +32,21 @@ def test_confirm_ticket_idempotent(client, user_a, conv_a, db_session):
     assert db_session.query(Ticket).count() == 1                 # 幂等只落一张
 
 
+def test_confirm_ticket_audits_tool_execution(client, user_a, conv_a, db_session):
+    from app.models.flywheel import ToolAuditLog
+
+    token, _ = sign_interrupt(conv_a.id, "ticket_confirm")
+    r = client.post("/api/chat/resume", json={
+        "conversation_id": conv_a.id, "interrupt_id": token,
+        "action": "confirm_ticket", "payload": {"description": "物流慢", "type": "投诉"}},
+        headers=_auth(client, "user_a"))
+    assert r.status_code == 200
+    logs = (db_session.query(ToolAuditLog)
+            .filter(ToolAuditLog.tool_name == "create_ticket").all())
+    assert len(logs) == 1                       # 建工单走统一执行引擎 → 落审计
+    assert logs[0].status.value == "成功"
+
+
 def test_resume_rejects_cross_session(client, user_a, user_b, conv_a, conv_b):
     token, _ = sign_interrupt(conv_a.id, "transfer_human")
     r = client.post("/api/chat/resume", json={

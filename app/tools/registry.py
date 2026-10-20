@@ -32,7 +32,15 @@ class ToolRegistry:
         self._specs[spec.name] = spec
 
     def resolve(self, name: str) -> ToolSpec | None:
-        return self._specs.get(name)
+        spec = self._specs.get(name)
+        if spec is not None:
+            return spec
+        # MCP 工具经 attach_mcp 动态发现、不注册进 _specs；execute() 须能解析到它们。
+        if self._mcp is not None:
+            for t in self._mcp.list_tools():
+                if t.name == name:
+                    return t
+        return None
 
     def attach_mcp(self, client) -> None:
         self._mcp = client

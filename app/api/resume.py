@@ -4,13 +4,14 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.chat import get_tool_registry
 from app.api.conversations import get_owned_conversation
 from app.auth.deps import get_current_user
 from app.db import get_db
 from app.models import User
 from app.schemas import ResumeRequest
-from app.tools.builtin import create_ticket_handler
 from app.tools.context import ExecutionContext
+from app.tools.executor import ToolExecutor
 from app.tools.interrupt import build_card, sign_interrupt, verify_interrupt
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -20,7 +21,8 @@ _ACTION_CARD = {"transfer": "transfer_human", "confirm_ticket": "ticket_confirm"
 
 
 @router.post("/resume")
-def resume(req: ResumeRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def resume(req: ResumeRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+           registry=Depends(get_tool_registry)):
     conv = get_owned_conversation(req.conversation_id, user, db)
 
     if req.action == "cancel":
@@ -43,8 +45,13 @@ def resume(req: ResumeRequest, db: Session = Depends(get_db), user: User = Depen
     if req.action == "confirm_ticket":
         p = req.payload or {}
         idem = hashlib.sha256(f"ticket:{conv.id}:{payload['nonce']}".encode()).hexdigest()
-        out = create_ticket_handler({"description": p.get("description", ""),
-                                     "type": p.get("type", "投诉"), "idempotency_key": idem}, ctx, db)
+        # 建工单是写工具，走统一执行引擎（审计 + 写确认 + 统一错误收敛），不绕过 executor。
+        out = ToolExecutor(registry, db).execute(
+            "create_ticket",
+            {"description": p.get("description", ""), "type": p.get("type", "投诉"),
+             "idempotency_key": idem},
+            ctx,
+        )
         return json.loads(out)
     # select_order → 退款预览卡片（D3：不真实提交）
     token, _ = sign_interrupt(conv.id, "refund_preview")

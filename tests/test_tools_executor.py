@@ -90,3 +90,35 @@ def test_agent_tools_wraps_run_through_executor(db_session):
     assert set(tools) == {"query_product", "query_order"}   # create_ticket 不可见
     assert tools["query_order"].run({"order_no": "O1"}) == "订单:C0001:O1"
     assert db_session.query(ToolAuditLog).count() == 1      # run 走执行器：audit 落库
+
+
+def test_execute_attached_mcp_tool_calls_server_and_audits(db_session):
+    """attach_mcp 发现的 MCP 工具必须能被 execute() 解析执行并落审计（Review Focus #4）。
+
+    生产路径：registry.attach_mcp(McpClient(...))，list_for_agent 暴露 MCP 工具给模型，
+    模型调用时 execute() 须 resolve 到该 MCP ToolSpec 并走 call_mcp，而不是返回「未知工具」。
+    """
+    class _FakeMCP:
+        def list_tools(self):
+            return [ToolSpec(name="query_logistics", description="查物流",
+                             input_schema={"type": "object"}, source="mcp",
+                             mcp_server="logistics", requires_customer=True,
+                             ownership_field="order_no")]
+
+        def call_tool(self, server, name, args):
+            return f"轨迹:{args.get('order_no')}"
+
+    db_session.add(Order(customer_id="C0001", order_no="O1", item_id="ITEM1",
+                         product_name="x", quantity=1, paid_amount=1,
+                         order_status="已签收", after_sale_status="无售后",
+                         order_time=datetime(2026, 1, 1)))
+    db_session.commit()
+
+    reg = ToolRegistry()
+    reg.attach_mcp(_FakeMCP())
+    ex = ToolExecutor(reg, db_session)
+    out = ex.execute("query_logistics", {"order_no": "O1"}, _ctx(customer_id="C0001"))
+    assert out == "轨迹:O1"
+    log = db_session.query(ToolAuditLog).one()
+    assert log.tool_name == "query_logistics"
+    assert log.tool_source.value == "mcp"

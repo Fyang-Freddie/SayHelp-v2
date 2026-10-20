@@ -47,7 +47,7 @@ class WorkflowState(TypedDict):
     citations: list[Citation]
     ctx: ExecutionContext          # 输入态：由 chat.py 注入
     agent_tools: list              # 输入态：由 chat.py 注入
-    card: dict | None              # 输出态：投诉/退款分支卡片
+    cards: list[dict]              # 输出态：投诉/退款分支交互卡片（可多张=多个按钮）
 
 
 # 闸不过时的诚实拒答文本（含「暂」/「无法」）。
@@ -124,12 +124,16 @@ def build_workflow(*, chat_model, intent_model, retriever, settings=settings) ->
     def _refund_aftersales(state: WorkflowState) -> dict:
         token, _ = sign_interrupt(state["ctx"].conversation_id, "order_select")
         return {"answer": "请选择需要办理的订单（退款仅作表单预览，不会真实提交）。",
-                "citations": [], "card": build_card("order_select", token, {})}
+                "citations": [], "cards": [build_card("order_select", token, {})]}
 
     def _complaint(state: WorkflowState) -> dict:
-        token, _ = sign_interrupt(state["ctx"].conversation_id, "transfer_human")
-        return {"answer": "很抱歉给您带来不便。您可以转接人工客服，坐席会尽快为您跟进。",
-                "citations": [], "card": build_card("transfer_human", token, {})}
+        conv_id = state["ctx"].conversation_id
+        transfer, _ = sign_interrupt(conv_id, "transfer_human")
+        ticket, _ = sign_interrupt(conv_id, "ticket_confirm")
+        return {"answer": "很抱歉给您带来不便。您可以选择转接人工客服，或提交工单，坐席会尽快为您跟进。",
+                "citations": [],
+                "cards": [build_card("transfer_human", transfer, {}),
+                          build_card("ticket_confirm", ticket, {})]}
 
     def _fixed_text(state: WorkflowState) -> dict:
         return {"answer": FIXED_TEXTS.get(state["branch"], FIXED_TEXTS[Branch.其他]), "citations": []}
