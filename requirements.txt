@@ -16,3 +16,5 @@ jieba>=0.42
 langgraph==1.2.12
 langchain-core==1.6.10
 langchain-openai==1.7.2
+# P4 MCP Server/Client（Task 5/6）：mcp Python SDK；<2 因 2.x 将 FastMCP 改名 MCPServer，版本经 PyPI JSON + 已装包内省核实（见 dev-notes/ch08.md）
+mcp==1.30.0
