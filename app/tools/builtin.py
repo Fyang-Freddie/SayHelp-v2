@@ -1,7 +1,10 @@
+import hashlib
 import json
+import secrets
+import time
 from datetime import datetime
 
-from app.models import Order, Product
+from app.models import Order, Product, Ticket
 from app.tools.registry import ToolSpec
 
 
@@ -40,6 +43,29 @@ def query_product_handler(args, ctx, db) -> str:
     ]}, ensure_ascii=False)
 
 
+def _gen_ticket_no(conversation_id: int) -> str:
+    # 毫秒时间戳 + 随机后缀，避免同秒多单撞 PK（ticket_no 是主键）
+    return f"TK{conversation_id % 100000:05d}{int(time.time() * 1000) % 10000000:07d}{secrets.randbelow(100):02d}"
+
+
+def create_ticket_handler(args, ctx, db) -> str:
+    idem = args.get("idempotency_key")
+    existing = db.query(Ticket).filter(Ticket.idempotency_key == idem).first() if idem else None
+    if existing is not None:
+        return json.dumps({"ticket_no": existing.ticket_no, "duplicate": True}, ensure_ascii=False)
+    ticket = Ticket(
+        ticket_no=_gen_ticket_no(ctx.conversation_id),
+        conversation_id=ctx.conversation_id,
+        description=args.get("description", ""),
+        type=args.get("type", "投诉"),
+        status="open",
+        idempotency_key=idem or hashlib.sha256(
+            f"{ctx.conversation_id}:{args.get('description','')}".encode()).hexdigest(),
+    )
+    db.add(ticket); db.commit()
+    return json.dumps({"ticket_no": ticket.ticket_no, "duplicate": False}, ensure_ascii=False)
+
+
 def query_faq_handler(args, ctx, retriever) -> str:
     r = retriever.retrieve(args.get("query", ""))
     if not r.passed:
@@ -66,3 +92,12 @@ def register_builtin_tools(registry, retriever) -> None:
                       "required": ["query"]},
         source="builtin",
         handler=lambda args, ctx, db: query_faq_handler(args, ctx, retriever)))
+    registry.register(ToolSpec(
+        name="create_ticket", description="创建人工工单（需用户确认）",
+        input_schema={"type": "object",
+                      "properties": {"description": {"type": "string"},
+                                     "type": {"type": "string"},
+                                     "idempotency_key": {"type": "string"}},
+                      "required": ["description"]},
+        source="builtin", is_write=True, visible_to_agent=False,
+        handler=create_ticket_handler))
