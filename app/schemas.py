@@ -42,3 +42,9 @@ class ChatStreamRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     type: str  # "up" | "down"
+
+class ResumeRequest(BaseModel):
+    conversation_id: int
+    interrupt_id: str
+    action: str                      # transfer | confirm_ticket | select_order | cancel
+    payload: dict | None = None

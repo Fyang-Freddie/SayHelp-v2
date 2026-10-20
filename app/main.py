@@ -2,7 +2,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agent, auth, chat, conversations
+from app.api import agent, auth, chat, conversations, resume
 
 app = FastAPI(title="SayHelp", version="0.1.0")
 
@@ -10,6 +10,7 @@ app.include_router(auth.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
 app.include_router(agent.router)
+app.include_router(resume.router)
 
 @app.get("/healthz")
 def healthz():
